@@ -51,6 +51,24 @@ class FitTest(unittest.TestCase):
     def test_xml_upload_is_not_a_fit_file(self):
         self.assertIsNone(self.summary(b'<?xml version="1.0"?><gpx/>'))
 
+    def test_truncated_file_is_rejected_not_crashing(self):
+        data = huawei_style()
+        cut = data[:40]                                   # header still claims the full length
+        with self.assertRaises(fit.FitError):
+            fit.messages(cut)
+        self.assertIsNone(self.summary(cut))
+        # length fixed up to the cut: the last record now runs past the data end
+        short = cut[:4] + struct.pack("<I", len(cut) - 12) + cut[8:]
+        with self.assertRaises(fit.FitError):
+            fit.messages(short)
+
+    def test_multi_session_file_is_not_used(self):
+        msgs = [(0, [(1, UINT16, 255)]),
+                (18, [(2, UINT32, 1000), (7, UINT32, 10000), (9, UINT32, 2000)]),
+                (18, [(2, UINT32, 1010), (7, UINT32, 15000), (9, UINT32, 3000)])]
+        msgs += [(20, [(253, UINT32, 1000 + t), (6, UINT16, 2000)]) for t in (0, 5, 10, 15, 20, 25)]
+        self.assertIsNone(self.summary(fit_bytes(msgs)))
+
 
 class UseDeviceTest(unittest.TestCase):
     ACT = {"id": "1", "type": "Run", "km": 4.2, "moving_s": 2295}

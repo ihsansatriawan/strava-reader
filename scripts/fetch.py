@@ -12,8 +12,15 @@ downloaded.
 
 Session: a dedicated headless Chrome on the cloned profile (chrome-data/)
 keeps the Strava login. Each run syncs its _strava4_session cookie and uses it
-for direct HTTP requests. If the session expired, writes data/SESSION_EXPIRED
-and exits 2 - run scripts/relogin.sh, log in once, then re-run.
+for direct HTTP requests. If the session expired (redirect to /login, HTTP
+401, the login form), writes data/SESSION_EXPIRED and exits 2 - run
+scripts/relogin.sh, log in once, then re-run. Any other failure of Strava
+itself (HTTP 5xx, an error page instead of JSON) exits 1 and leaves the
+login alone: the next run simply tries again.
+
+Downloads: each export (original FIT, GPX) is tracked on its own in
+data/downloads.json and retried until it is saved or Strava answers 404; a
+FIT file that doesn't parse whole (truncated) is not saved and retried too.
 """
 import base64
 import glob
@@ -28,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import fit  # noqa: E402
 from config import DATA_SINCE, in_scope  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +58,10 @@ BASE = "https://www.strava.com"
 
 class SessionExpired(Exception):
     pass
+
+
+class UpstreamError(Exception):
+    """Strava answered, but not with what was asked for (5xx, an error page)."""
 
 
 def now_iso():
@@ -138,6 +150,8 @@ def http_get(cookie, url, xhr=False):
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=90) as r:
+            if "/login" in r.url:
+                raise SessionExpired(f"redirected to login: {url}")
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -188,11 +202,11 @@ def fetch_summaries(cookie):
                f"&new_activity_only=false&page={page}")
         status, body = get(cookie, url, xhr=True)
         if status != 200:
-            raise SessionExpired(f"summaries page {page} returned HTTP {status}")
+            raise UpstreamError(f"summaries page {page} returned HTTP {status}")
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
-            raise SessionExpired(f"summaries page {page} returned non-JSON (session dead?)")
+            raise UpstreamError(f"summaries page {page} returned non-JSON (HTTP {status})")
         batch = data.get("models", [])
         models.extend(batch)
         total = data.get("total", 0)
@@ -211,44 +225,76 @@ def fetch_summaries(cookie):
     return models
 
 
-def download_one(cookie, m):
+def fit_ok(body):
+    """A FIT download is usable when it parses whole; other originals (GPX/TCX
+    uploads) are kept as they are."""
+    try:
+        fit.messages(body)
+    except fit.FitError:
+        return False
+    return True
+
+
+def done(rec, kind, aid):
+    """Whether one export of an activity needs no more attempts: saved (and, for
+    the FIT, still whole on disk) or 404 at Strava."""
+    v = rec.get(kind)
+    if v == "404":
+        return True
+    if not isinstance(v, int):
+        return False
+    if kind == "fit":
+        p = FIT_DIR / f"{aid}.fit"
+        return p.exists() and fit_ok(p.read_bytes())
+    return (GPX_DIR / f"{aid}.gpx").exists()
+
+
+def download_one(cookie, m, prev=None):
+    """Fetch the exports of one activity that prev (its downloads.json record)
+    doesn't already have; state is ok once both are done."""
     aid = m["id_str"]
-    rec = {"name": m.get("name"), "date": m.get("start_date"), "fit": None, "gpx": None}
-    status, body = get(cookie, f"{BASE}/activities/{aid}/export_original")
-    if status == 200 and len(body) > 32 and not body.lstrip()[:15].startswith(b"<!DOCTYPE"):
-        (FIT_DIR / f"{aid}.fit").write_bytes(body)
-        rec["fit"] = len(body)
-    elif status == 404:
-        rec["fit"] = "404"
-    else:
-        rec["fit"] = f"error:{status}"
-    status, body = get(cookie, f"{BASE}/activities/{aid}/export_gpx")
-    if status == 200 and body.lstrip().startswith((b"<?xml", b"<gpx")):
-        (GPX_DIR / f"{aid}.gpx").write_bytes(body)
-        rec["gpx"] = len(body)
-    elif status == 404:
-        rec["gpx"] = "404"
-    else:
-        rec["gpx"] = f"error:{status}"
-    ok = (isinstance(rec["fit"], int) or isinstance(rec["gpx"], int)
-          or rec["fit"] == "404" or rec["gpx"] == "404")
-    rec["state"] = "ok" if ok else "error"
+    prev = prev or {}
+    rec = {"name": m.get("name"), "date": m.get("start_date"), "fit": prev.get("fit"), "gpx": prev.get("gpx")}
+    if not done(rec, "fit", aid):
+        status, body = get(cookie, f"{BASE}/activities/{aid}/export_original")
+        if status == 200 and len(body) > 32 and not body.lstrip()[:15].startswith(b"<!DOCTYPE"):
+            if fit_ok(body):
+                (FIT_DIR / f"{aid}.fit").write_bytes(body)
+                rec["fit"] = len(body)
+            else:
+                rec["fit"] = "error:truncated"
+        elif status == 404:
+            rec["fit"] = "404"
+        else:
+            rec["fit"] = f"error:{status}"
+    if not done(rec, "gpx", aid):
+        status, body = get(cookie, f"{BASE}/activities/{aid}/export_gpx")
+        if status == 200 and body.lstrip().startswith((b"<?xml", b"<gpx")):
+            (GPX_DIR / f"{aid}.gpx").write_bytes(body)
+            rec["gpx"] = len(body)
+        elif status == 404:
+            rec["gpx"] = "404"
+        else:
+            rec["gpx"] = f"error:{status}"
+    rec["state"] = "ok" if done(rec, "fit", aid) and done(rec, "gpx", aid) else "error"
     return rec
 
 
 def download_files(cookie, models):
     downloads = json.loads(DOWNLOADS_FILE.read_text()) if DOWNLOADS_FILE.exists() else {}
     todo = [m for m in models
-            if downloads.get(m["id_str"], {}).get("state") not in ("ok", "missing")]
+            if downloads.get(m["id_str"], {}).get("state") != "missing"
+            and not all(done(downloads.get(m["id_str"], {}), k, m["id_str"]) for k in ("fit", "gpx"))]
     print(f"files to fetch: {len(todo)} of {len(models)} activities")
     for i, m in enumerate(todo, 1):
+        prev = downloads.get(m["id_str"], {})
         try:
-            rec = download_one(cookie, m)
+            rec = download_one(cookie, m, prev)
         except SessionExpired:
             raise
         except Exception as e:
-            rec = {"name": m.get("name"), "state": "error", "error": str(e)[:200]}
-        rec["state"] = rec.get("state", "error")
+            rec = {"name": m.get("name"), "fit": prev.get("fit"), "gpx": prev.get("gpx"),
+                   "state": "error", "error": str(e)[:200]}
         downloads[m["id_str"]] = rec
         DOWNLOADS_FILE.write_text(json.dumps(downloads, indent=1, sort_keys=True))
         if isinstance(rec.get("fit"), int) and isinstance(rec.get("gpx"), int):
@@ -275,6 +321,8 @@ def main():
         print(f"file sync complete: {n} activities processed")
     except SessionExpired as e:
         expire(str(e))
+    except UpstreamError as e:
+        sys.exit(f"STRAVA ERROR: {e} - not a login problem; the next sync retries")
 
 
 if __name__ == "__main__":

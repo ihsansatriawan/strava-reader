@@ -54,7 +54,11 @@ dedicated Chrome profile (`chrome-data/`). `scripts/fetch.py`:
 4. Fetches everything over plain HTTP with that cookie (fast), with an
    in-browser fallback if Cloudflare interferes.
 5. Keeps only activities since `DATA_SINCE` and downloads only what's new
-   (`data/downloads.json` tracks state).
+   (`data/downloads.json` tracks each export — FIT and GPX — on its own; one
+   that failed or arrived truncated is retried next sync, a 404 is final).
+6. Tells a dead login (redirect to `/login`, HTTP 401, the login form → exit
+   2, `data/SESSION_EXPIRED`) apart from Strava itself failing (HTTP 5xx, an
+   error page → exit 1, `STRAVA ERROR`, nothing to fix: the next sync retries).
 
 ### How the data is cleaned
 
@@ -71,9 +75,14 @@ dedicated Chrome profile (`chrome-data/`). `scripts/fetch.py`:
   so per-km bests are left out for those runs.
 - **Duplicate uploads are merged.** If both a phone app and a watch upload the
   same run, Strava keeps both. Every report collapses activities of the same
-  sport that start within 3 minutes into one, keeping the copy with heart rate
+  sport that start within 3 minutes of each other into one (another sport
+  starting in between doesn't split them), keeping the copy with heart rate
   (the watch), then the earlier upload. Without this, totals double-count. Once
   you record with the watch only, there is nothing to merge.
+- **A broken file doesn't break a report.** A truncated FIT, or one holding
+  several sessions, falls back to Strava's summary; a GPX without a usable
+  track still counts in totals, weekly load and the calendar, it just has no
+  point-by-point charts.
 - **Local time is kept as local time.** Strava's `start_date_local_raw` is the
   wall-clock time encoded as a UTC epoch; it is decoded as UTC so the machine's
   timezone can't shift an evening run into the next day (and the next week).
@@ -188,8 +197,9 @@ python3 -m unittest discover -s tests
 ```
 
 They cover the data scope, local-time decoding, duplicate merging, the FIT
-reader (on a synthetic Huawei-style file) and the watch-over-Strava distance
-rule.
+reader (on a synthetic Huawei-style file, plus truncated and multi-session
+files), the watch-over-Strava distance rule, download retries, km splits,
+short/partial tracks, sheet formula handling, and `sync.sh`'s exit status.
 
 ### 6. Schedule it
 
@@ -223,7 +233,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.pl
 
 - Manual run now: `launchctl kickstart gui/$(id -u)/com.ihsan.strava-sync`
   (or just `scripts/sync.sh`)
-- Logs: `logs/cron.log`
+- Logs: `logs/cron.log`; the last line lists every stage's exit status
+  (`fetch=0 analyze=0 …`), and `sync.sh` exits 1 if any stage failed (each
+  stage still runs after an earlier one fails)
 - Change the schedule: edit `StartCalendarInterval` (`Weekday 0` = Sunday),
   then `launchctl bootout` + `bootstrap` again.
 - Pause it on this machine (survives reboots, keeps the plist):
@@ -239,9 +251,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.pl
 `scripts/sheet.py` rebuilds six tabs from `data/` (Aktivitas, Data alat
 (FIT), Analisis lari, Split per km, Mingguan, Catatan) and writes them to
 `reports/sheet.json`. With `--push` it POSTs them to a small Apps Script web
-app bound to the sheet, which **clears each tab and writes it whole**. No row
-is ever appended, so rerunning a sync cannot create duplicates. `sync.sh`
-runs it with `--push` after the story page.
+app bound to the sheet, which **rewrites each tab whole**: every tab is first
+written to a hidden staging tab and only then copied over the live one, so a
+push that fails mid-way leaves the previous contents; pushes run one at a
+time. No row is ever appended, so rerunning a sync cannot create
+duplicates. Text is always written as text (an activity named `=1+1` stays
+`=1+1`); the only formulas are the `link` column's. `sync.sh` runs it with
+`--push` after the story page.
 
 One-time setup:
 
@@ -249,8 +265,10 @@ One-time setup:
    `STRAVA_SHEET_TOKEN=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")`
    and the sheet's own id (the long id in its URL) as `STRAVA_SHEET_ID=...`.
 2. In the sheet: **Extensions → Apps Script**, paste `sheets/webapp.gs`, then set
-   the script property `TOKEN` (**Project Settings → Script Properties**) to
-   the same value.
+   the script properties (**Project Settings → Script Properties**) `TOKEN` to
+   the same token and `SPREADSHEET_ID` to the same sheet id; the web app
+   writes only to that sheet and refuses a push for any other id.
+3. **Deploy → New deployment → Web app**, execute as me, access Anyone.
    Authorize, copy the `/exec` URL into `.env` as `STRAVA_SHEET_URL=...`. After
    any later edit of `webapp.gs`, re-deploy with **Version: New version** —
    `/exec` keeps running its pinned old code otherwise, and `--push` fails on
@@ -301,6 +319,10 @@ diagrams/             # mechanism diagrams (public-safe)
 
 - **`SESSION EXPIRED`** (fetch exits 2, writes `data/SESSION_EXPIRED`):
   run `scripts/relogin.sh`, log in once, re-run. Nothing else to fix.
+- **`STRAVA ERROR`** (fetch exits 1): Strava answered with a server error or
+  an error page instead of data. Not a login problem; the next sync retries.
+- **`push failed: spreadsheetId … is not the configured sheet`**: the
+  `SPREADSHEET_ID` script property and `STRAVA_SHEET_ID` in `.env` disagree.
 - **Cloudflare block**: `fetch.py` automatically retries the request inside
   the logged-in browser (a real Chrome fetch) — no action needed.
 - **`crontab -` hangs**: on some macOS setups writing crontabs stalls; that's

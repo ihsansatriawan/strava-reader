@@ -10,6 +10,7 @@ Charts (all inline SVG, no JS, design follows the diagram-design style guide):
   6. Consistency grid    - weeks x days, run days filled
   7. Insights            - computed, not hand-written
 """
+import math
 import re
 import statistics
 import sys
@@ -40,7 +41,7 @@ HR_RE = re.compile(r"<gpxtpx:hr>(\d+)</gpxtpx:hr>")
 
 
 def pace(sec_per_km):
-    m, s = int(sec_per_km // 60), int(round(sec_per_km % 60))
+    m, s = divmod(int(round(sec_per_km)), 60)
     return f"{m}:{s:02d}"
 
 
@@ -188,9 +189,9 @@ def chart_hreff(runs):
 
 
 def chart_distance(runs):
-    """Per-run distance dots."""
+    """Per-run distance dots; the scale reaches the longest run (at least 12 km)."""
     X0, X1, Y0, Y1 = 44, 932, 36, 200
-    top = 12
+    top = max(12, math.ceil(max((r["km"] for r in runs), default=0) / 3) * 3)
     body = []
     for gy in range(0, top + 1, 3):
         y = Y1 - gy / top * (Y1 - Y0)

@@ -36,8 +36,7 @@ def hms(seconds):
 def pace_str(seconds, meters):
     if not meters:
         return "-"
-    sec_per_km = seconds / (meters / 1000)
-    m, s = int(sec_per_km // 60), int(round(sec_per_km % 60))
+    m, s = divmod(int(round(seconds / (meters / 1000))), 60)
     return f"{m}:{s:02d} /km"
 
 
@@ -82,24 +81,26 @@ DUP_WINDOW_S = 180
 def dedupe(acts, has_hr):
     """Collapse one session uploaded twice (phone app + watch sync).
 
-    Same sport starting within DUP_WINDOW_S counts as one session. The copy
-    with heart rate wins, then the earlier upload. Returns (kept, n_merged),
-    kept in the input order.
+    Same sport starting within DUP_WINDOW_S of a group's first upload counts as
+    one session, whatever other sports start in between. The copy with heart
+    rate wins, then the earlier upload. Returns (kept, dup_of): kept in the
+    input order, dup_of = {id of each dropped upload: id of the copy kept}.
     """
-    groups = []
+    groups, open_ = [], {}  # open_: sport -> its latest group
     for a in sorted(acts, key=lambda a: a["start"]):
-        g = groups[-1] if groups else None
-        if g and g[0]["type"] == a["type"] and (a["start"] - g[0]["start"]).total_seconds() < DUP_WINDOW_S:
+        g = open_.get(a["type"])
+        if g and (a["start"] - g[0]["start"]).total_seconds() < DUP_WINDOW_S:
             g.append(a)
         else:
-            groups.append([a])
-    keep = set()
+            g = [a]
+            groups.append(g)
+            open_[a["type"]] = g
+    keep, dup_of = set(), {}
     for g in groups:
-        if len(g) == 1:
-            keep.add(id(g[0]))
-        else:
-            keep.add(id(min(g, key=lambda a: (not has_hr(a), int(a["id"])))))
-    return [a for a in acts if id(a) in keep], len(acts) - len(keep)
+        k = min(g, key=lambda a: (not has_hr(a), int(a["id"]))) if len(g) > 1 else g[0]
+        keep.add(id(k))
+        dup_of.update((a["id"], k["id"]) for a in g if a is not k)
+    return [a for a in acts if id(a) in keep], dup_of
 
 
 def read_activities():
@@ -129,8 +130,8 @@ def read_activities():
 def load():
     """Return (fetched_at, activities newest first, n duplicate uploads merged)."""
     fetched_at, acts = read_activities()
-    acts, merged = dedupe(acts, has_hr=lambda a: gpx_has_hr(GPX_DIR / f"{a['id']}.gpx"))
-    return fetched_at, acts, merged
+    acts, dup_of = dedupe(acts, has_hr=lambda a: gpx_has_hr(GPX_DIR / f"{a['id']}.gpx"))
+    return fetched_at, acts, len(dup_of)
 
 
 def iso_weeks_back(now, n):
