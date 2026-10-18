@@ -1,4 +1,4 @@
-# rea-strava
+# strava-reader
 
 Sync, analyze, and visualize **your own Strava data** — locally, on a schedule,
 without a Strava subscription.
