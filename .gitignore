@@ -1,0 +1,11 @@
+chrome-data/
+data/
+reports/
+logs/
+__pycache__/
+*.pyc
+.env
+.claude/
+skills-lock.json
+.DS_Store
+SESSION_EXPIRED

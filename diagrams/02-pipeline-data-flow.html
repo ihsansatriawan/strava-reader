@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Sinkronisasi Harian</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1100px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 728px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data Flow · Pipeline Harian</p>
+    <h1>Dari cron 06:30 sampai laporan latihan</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 728 436" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-pipeline-title flow-pipeline-desc">
+        <title id="flow-pipeline-title">Pipeline sinkronisasi harian data Strava</title>
+        <desc id="flow-pipeline-desc">Diagram alur data dengan empat peran — pemicu, penarik, simpanan, analisis — yang menunjukkan LaunchAgent memicu fetch.py tiap 06:30, cookie session dari Chrome headless dipakai untuk menarik data Strava ke folder data, lalu analyze.py menghasilkan laporan.</desc>
+        <defs>
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="11" cy="11" r="0.8" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          <marker id="arr-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#4f5d75"/></marker>
+          <marker id="arr-accent" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#bf4520"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/>
+        <!-- lane tints (k=0, k=2) -->
+        <rect x="0" y="36" width="728" height="80" fill="rgba(45,49,66,0.018)"/>
+        <rect x="0" y="196" width="728" height="80" fill="rgba(45,49,66,0.018)"/>
+        <!-- lane dividers -->
+        <line x1="0" y1="36" x2="728" y2="36" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <line x1="0" y1="116" x2="728" y2="116" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <line x1="0" y1="196" x2="728" y2="196" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <line x1="0" y1="276" x2="728" y2="276" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <line x1="0" y1="356" x2="728" y2="356" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <line x1="140" y1="36" x2="140" y2="356" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+        <!-- arrows (before nodes) -->
+        <path d="M246,76 L354,76 Q362,76 362,84 L362,156 Q362,164 370,164" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr-muted)"/>
+        <line x1="358" y1="148" x2="370" y2="148" stroke="#4f5d75" stroke-width="1" marker-end="url(#arr-muted)"/>
+        <path d="M470,156 L524,156 Q532,156 532,164 L532,204" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arr-muted)"/>
+        <path d="M582,236 L636,236 Q644,236 644,244 L644,284" fill="none" stroke="#bf4520" stroke-width="1.2" marker-end="url(#arr-accent)"/>
+        <rect x="588" y="216" width="112" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="644" y="225" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">173 AKTIVITAS + HR</text>
+        <!-- header step chips -->
+        <g>
+          <rect x="180" y="6" width="32" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+          <text x="196" y="17" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">01</text>
+          <text x="196" y="29" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">PICU</text>
+          <rect x="292" y="6" width="32" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+          <text x="308" y="17" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">02</text>
+          <text x="308" y="29" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SESI</text>
+          <rect x="404" y="6" width="32" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+          <text x="420" y="17" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">03</text>
+          <text x="420" y="29" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">TARIK</text>
+          <rect x="516" y="6" width="32" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+          <text x="532" y="17" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">04</text>
+          <text x="532" y="29" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SIMPAN</text>
+          <rect x="628" y="6" width="32" height="16" rx="8" fill="rgba(191,69,32,0.20)"/>
+          <text x="644" y="17" fill="#bf4520" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">05</text>
+          <text x="644" y="29" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">LAPOR</text>
+        </g>
+        <!-- lane labels -->
+        <text x="70" y="72" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">PEMICU</text>
+        <text x="70" y="84" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SCHEDULER</text>
+        <text x="70" y="152" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">PENARIK</text>
+        <text x="70" y="164" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">FETCHER</text>
+        <text x="70" y="232" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SIMPANAN</text>
+        <text x="70" y="244" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">STORAGE</text>
+        <text x="70" y="312" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ANALISIS</text>
+        <text x="70" y="324" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ANALYST</text>
+        <!-- node: PMC0 LaunchAgent -->
+        <g>
+          <rect x="146" y="44" width="100" height="64" rx="6" fill="#f5f5f5" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+          <rect x="150" y="48" width="18" height="10" rx="3" fill="rgba(45,49,66,0.12)"/>
+          <text x="159" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">PMC</text>
+          <text x="196" y="67" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">LaunchAgent</text>
+          <text x="196" y="79" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">picu tiap 06:30</text>
+          <text x="196" y="91" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">launchd &#183; sync.sh</text>
+          <rect x="150" y="98" width="16" height="8" rx="3" fill="#4a7c59"/>
+          <text x="158" y="104" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">LS</text>
+        </g>
+        <!-- node: FCH1 Chrome headless -->
+        <g>
+          <rect x="258" y="124" width="100" height="64" rx="6" fill="#f5f5f5" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+          <rect x="262" y="128" width="18" height="10" rx="3" fill="rgba(45,49,66,0.12)"/>
+          <text x="271" y="136" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">FCH</text>
+          <text x="308" y="147" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Chrome Headless</text>
+          <text x="308" y="159" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">chrome-data</text>
+          <text x="308" y="171" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">CDP :9222</text>
+        </g>
+        <!-- node: FCH2 fetch.py -->
+        <g>
+          <rect x="370" y="124" width="100" height="64" rx="6" fill="#f5f5f5" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+          <rect x="374" y="128" width="18" height="10" rx="3" fill="rgba(45,49,66,0.12)"/>
+          <text x="383" y="136" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">FCH</text>
+          <text x="420" y="147" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">fetch.py</text>
+          <text x="420" y="159" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">ringkasan + unduhan</text>
+          <text x="420" y="171" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">HTTP &#183; _strava4_session</text>
+          <rect x="374" y="178" width="16" height="8" rx="3" fill="#6e6479"/>
+          <text x="382" y="184" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">WB</text>
+          <rect x="450" y="178" width="16" height="8" rx="3" fill="#5e7a9b"/>
+          <text x="458" y="184" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">DB</text>
+        </g>
+        <!-- node: OUT3 data/ -->
+        <g>
+          <rect x="482" y="204" width="100" height="64" rx="6" fill="#f5f5f5" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+          <rect x="486" y="208" width="18" height="10" rx="3" fill="rgba(45,49,66,0.12)"/>
+          <text x="495" y="216" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">OUT</text>
+          <text x="532" y="227" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">data/</text>
+          <text x="532" y="239" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">173 JSON &#183; FIT &#183; GPX</text>
+          <text x="532" y="251" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">fit/ &#183; gpx/ &#183; json</text>
+          <rect x="486" y="258" width="16" height="8" rx="3" fill="#5e7a9b"/>
+          <text x="494" y="264" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">DB</text>
+          <rect x="562" y="258" width="16" height="8" rx="3" fill="#5e7a9b"/>
+          <text x="570" y="264" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">DB</text>
+        </g>
+        <!-- node: ANL4 analyze.py (focal) -->
+        <g>
+          <rect x="594" y="284" width="100" height="64" rx="6" fill="rgba(191,69,32,0.07)" stroke="#bf4520" stroke-width="1"/>
+          <rect x="598" y="288" width="18" height="10" rx="3" fill="rgba(191,69,32,0.18)"/>
+          <text x="607" y="296" fill="#bf4520" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">ANL</text>
+          <text x="644" y="307" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">analyze.py</text>
+          <text x="644" y="319" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">tren &#183; pace &#183; HR</text>
+          <text x="644" y="331" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">reports/latest.md</text>
+          <rect x="598" y="338" width="16" height="8" rx="3" fill="#5e7a9b"/>
+          <text x="606" y="344" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">DB</text>
+          <rect x="674" y="338" width="16" height="8" rx="3" fill="#9c6b50"/>
+          <text x="682" y="344" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+        </g>
+        <!-- legend -->
+        <text x="144" y="376" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TAHAP</text>
+        <rect x="200" y="364" width="24" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+        <text x="212" y="375" fill="#2d3142" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">01</text>
+        <text x="230" y="376" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">PICU</text>
+        <rect x="280" y="364" width="24" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+        <text x="292" y="375" fill="#2d3142" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">02</text>
+        <text x="310" y="376" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">SESI</text>
+        <rect x="360" y="364" width="24" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+        <text x="372" y="375" fill="#2d3142" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">03</text>
+        <text x="390" y="376" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">TARIK</text>
+        <rect x="450" y="364" width="24" height="16" rx="8" fill="rgba(45,49,66,0.12)"/>
+        <text x="462" y="375" fill="#2d3142" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">04</text>
+        <text x="480" y="376" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">SIMPAN</text>
+        <rect x="548" y="364" width="24" height="16" rx="8" fill="rgba(191,69,32,0.20)"/>
+        <text x="560" y="375" fill="#bf4520" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">05</text>
+        <text x="578" y="376" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace">LAPOR</text>
+        <text x="144" y="397" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TIPE DATA</text>
+        <rect x="236" y="389" width="16" height="8" rx="3" fill="#4a7c59"/>
+        <text x="244" y="395" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">LS</text>
+        <text x="258" y="397" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">EVENT</text>
+        <rect x="308" y="389" width="16" height="8" rx="3" fill="#6e6479"/>
+        <text x="316" y="395" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">WB</text>
+        <text x="330" y="397" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">WEB</text>
+        <rect x="380" y="389" width="16" height="8" rx="3" fill="#5e7a9b"/>
+        <text x="388" y="395" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">DB</text>
+        <text x="402" y="397" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">MENTAH</text>
+        <rect x="472" y="389" width="16" height="8" rx="3" fill="#9c6b50"/>
+        <text x="480" y="395" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+        <text x="494" y="397" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">LAPORAN</text>
+        <text x="572" y="397" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace">kiri = input &#183; kanan = output</text>
+        <text x="144" y="419" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">ALUR</text>
+        <line x1="200" y1="415" x2="232" y2="415" stroke="#4f5d75" stroke-width="1" marker-end="url(#arr-muted)"/>
+        <text x="240" y="419" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">DATA</text>
+        <line x1="300" y1="415" x2="332" y2="415" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr-muted)"/>
+        <text x="340" y="419" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace">PICU</text>
+        <line x1="400" y1="415" x2="432" y2="415" stroke="#bf4520" stroke-width="1.2" marker-end="url(#arr-accent)"/>
+        <text x="440" y="419" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace">FOKUS</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Penemuan Endpoint Strava</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Mekanisme Pengambilan Data</p>
+    <h1>Bagaimana endpoint Strava ditemukan lewat sesi login</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 656" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="seq-discovery-title seq-discovery-desc">
+        <title id="seq-discovery-title">Penemuan endpoint data Strava via sesi login</title>
+        <desc id="seq-discovery-desc">Diagram urutan yang menunjukkan penyalinan cookie dari Chrome utama, peluncuran Chrome headless dengan CDP, dan panggilan HTTP yang menemukan tiga endpoint data gratis plus satu endpoint berbayar 403.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+          <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- lifelines -->
+        <line x1="120" y1="84" x2="120" y2="560" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="400" y1="84" x2="400" y2="560" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="640" y1="84" x2="640" y2="560" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="856" y1="84" x2="856" y2="560" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <!-- activation bars -->
+        <rect x="116" y="108" width="8" height="88" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="396" y="108" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="636" y="180" width="8" height="304" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="852" y="220" width="8" height="264" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <!-- messages: labels (mask first), then arrows -->
+        <!-- m1 -->
+        <rect x="175" y="96" width="170" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="260" y="105" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">clone cookie DB (SQLite backup)</text>
+        <line x1="120" y1="116" x2="400" y2="116" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <!-- m2 return -->
+        <rect x="172" y="128" width="176" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="260" y="137" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">Cookies &#8594; chrome-data/</text>
+        <line x1="400" y1="148" x2="120" y2="148" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <!-- m3 async launch -->
+        <rect x="305" y="168" width="150" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="380" y="177" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">launch headless + CDP :9222</text>
+        <line x1="120" y1="188" x2="640" y2="188" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-open)"/>
+        <!-- m4 http -->
+        <rect x="664" y="208" width="168" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="217" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET /dashboard + Cookie sesi</text>
+        <line x1="640" y1="228" x2="856" y2="228" stroke="#2e5aa8" stroke-width="1" marker-end="url(#arrow-link)"/>
+        <!-- m5 return -->
+        <rect x="683" y="240" width="130" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="249" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">200 &#183; login masih aktif</text>
+        <line x1="856" y1="260" x2="640" y2="260" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <!-- m6 http -->
+        <rect x="656" y="280" width="184" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="289" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET training_activities (XHR)</text>
+        <line x1="640" y1="300" x2="856" y2="300" stroke="#2e5aa8" stroke-width="1" marker-end="url(#arrow-link)"/>
+        <!-- m7 headline coral -->
+        <rect x="680" y="312" width="136" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="321" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">200 &#183; JSON 173 aktivitas</text>
+        <line x1="856" y1="332" x2="640" y2="332" stroke="#bf4520" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <!-- m8 http -->
+        <rect x="648" y="352" width="200" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="361" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET export_original &#183; export_gpx</text>
+        <line x1="640" y1="372" x2="856" y2="372" stroke="#2e5aa8" stroke-width="1" marker-end="url(#arrow-link)"/>
+        <!-- m9 return -->
+        <rect x="656" y="384" width="184" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="393" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">200 &#183; .FIT + .GPX (GPS &#183; HR)</text>
+        <line x1="856" y1="404" x2="640" y2="404" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <!-- m10 http -->
+        <rect x="660" y="424" width="176" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="433" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET /activities/{id}/streams</text>
+        <line x1="640" y1="444" x2="856" y2="444" stroke="#2e5aa8" stroke-width="1" marker-end="url(#arrow-link)"/>
+        <!-- m11 return 403 -->
+        <rect x="683" y="456" width="130" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="465" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">403 &#183; paywall langganan</text>
+        <line x1="856" y1="476" x2="640" y2="476" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <!-- actor boxes -->
+        <g>
+          <rect x="32" y="40" width="176" height="44" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+          <rect x="40" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+          <text x="54" y="55" fill="rgba(90,101,128,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+          <text x="120" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Agent (omp)</text>
+          <text x="120" y="79" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">sesi terminal</text>
+        </g>
+        <g>
+          <rect x="312" y="40" width="176" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+          <rect x="320" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+          <text x="334" y="55" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CHR</text>
+          <text x="400" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Chrome Utama</text>
+          <text x="400" y="79" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">profil Chrome utama</text>
+        </g>
+        <g>
+          <rect x="552" y="40" width="176" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+          <rect x="560" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+          <text x="574" y="55" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CDP</text>
+          <text x="640" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Chrome Headless</text>
+          <text x="640" y="79" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">chrome-data &#183; CDP :9222</text>
+        </g>
+        <g>
+          <rect x="768" y="40" width="176" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+          <rect x="776" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+          <text x="790" y="55" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+          <text x="856" y="66" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">strava.com</text>
+          <text x="856" y="79" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">web app &#183; session cookie</text>
+        </g>
+        <!-- editorial callout -->
+        <text x="48" y="540" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Seluruh sesi dipantau lewat agent-browser CLI (CDP) &#8212; tanpa pernah menyentuh password.</text>
+        <!-- legend -->
+        <line x1="32" y1="592" x2="928" y2="592" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="32" y="612" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGENDA</text>
+        <line x1="120" y1="609" x2="156" y2="609" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="164" y="612" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">PANGGILAN</text>
+        <line x1="292" y1="609" x2="328" y2="609" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <text x="336" y="612" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">BALASAN</text>
+        <line x1="464" y1="609" x2="500" y2="609" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-open)"/>
+        <text x="508" y="612" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ASYNC</text>
+        <line x1="608" y1="609" x2="644" y2="609" stroke="#2e5aa8" stroke-width="1" marker-end="url(#arrow-link)"/>
+        <text x="652" y="612" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">HTTP</text>
+        <line x1="764" y1="609" x2="800" y2="609" stroke="#bf4520" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <text x="808" y="612" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">HASIL UTAMA</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
