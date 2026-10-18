@@ -60,7 +60,7 @@
     <div class="diagram-container">
       <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-pipeline-title flow-pipeline-desc">
         <title id="flow-pipeline-title">Pipeline sinkronisasi mingguan Strava dengan mirror Google Sheet</title>
-        <desc id="flow-pipeline-desc">Diagram alur data tiga tahap &#8212; tarik dan lapor, mirror, verifikasi &#8212; yang menunjukkan LaunchAgent memicu fetch.py tiap Minggu 22:00 lewat sync.sh, data di folder data dianalisis analyze, progress, dan story, lalu sheet.py --push meng-POST enam tab ke Apps Script webapp.gs yang menulis ulang Google Sheet utuh (clear dulu, tanpa LLM), dan hasil bacanya dicek sel per sel.</desc>
+        <desc id="flow-pipeline-desc">Diagram alur data tiga tahap &#8212; tarik dan lapor, mirror, verifikasi &#8212; yang menunjukkan LaunchAgent memicu fetch.py tiap Minggu 22:00 lewat sync.sh, data di folder data dianalisis analyze, progress, dan story, lalu sheet.py --push meng-POST enam tab ke Apps Script webapp.gs yang menulis ulang Google Sheet utuh (staging dulu, satu push sekaligus, tanpa LLM), dan hasil bacanya dicek sel per sel.</desc>
         <defs>
           <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
             <circle cx="11" cy="11" r="0.8" fill="rgba(45,49,66,0.10)"/>
@@ -166,8 +166,8 @@
           <rect x="272" y="176" width="18" height="10" rx="3" fill="rgba(191,69,32,0.18)"/>
           <text x="281" y="184" fill="#bf4520" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">WBA</text>
           <text x="323" y="195" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">webapp.gs /exec</text>
-          <text x="323" y="207" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">Apps Script &#183; token TOKEN</text>
-          <text x="323" y="219" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">clear &#8594; tulis &#8594; format</text>
+          <text x="323" y="207" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">Apps Script &#183; TOKEN + SPREADSHEET_ID</text>
+          <text x="323" y="219" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">lock &#8594; staging &#8594; tulis &#8594; format</text>
           <rect x="272" y="226" width="16" height="8" rx="3" fill="#6e6479"/>
           <text x="280" y="232" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">WB</text>
         </g>
@@ -188,7 +188,7 @@
           <text x="159" y="324" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">CHK</text>
           <text x="201" y="335" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">check sel-per-sel</text>
           <text x="201" y="347" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">readback vs data &#183; &#177;3 detik</text>
-          <text x="201" y="359" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">v &#8800; 2 &#8594; berhenti exit 1</text>
+          <text x="201" y="359" fill="#5a6580" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">v &#8800; 3 &#8594; berhenti exit 1</text>
         </g>
         <rect x="284" y="316" width="170" height="26" rx="13" fill="rgba(74,124,89,0.10)" stroke="#4a7c59" stroke-width="1"/>
         <text x="369" y="333" fill="#4a7c59" font-size="7" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SHEET CHECK OK &#183; EXIT 0</text>
@@ -197,9 +197,9 @@
         <!-- editorial callouts -->
         <text x="524" y="198" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Mirror Sheet kini script murni: satu POST stdlib</text>
         <text x="524" y="216" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">ke Apps Script &#8212; tanpa LLM, tanpa token model.</text>
-        <text x="524" y="304" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Tiap tab di-clear lalu ditulis ulang utuh &#8212; tanpa</text>
-        <text x="524" y="322" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">append, jadi rerun tidak mungkin menambah baris ganda.</text>
-        <text x="524" y="348" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Balasan membawa v: 2 &#8212; kalau /exec masih versi lama,</text>
+        <text x="524" y="304" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Tiap tab ditulis ke staging dulu, baru menimpa tab asli</text>
+        <text x="524" y="322" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">utuh &#8212; gagal di tengah, isi lama tetap; tanpa append.</text>
+        <text x="524" y="348" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">Balasan membawa v: 3 &#8212; kalau /exec masih versi lama,</text>
         <text x="524" y="366" fill="#4f5d75" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">push berhenti dengan pesan re-deploy, bukan MISMATCH.</text>
         <!-- legend -->
         <line x1="32" y1="424" x2="928" y2="424" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>

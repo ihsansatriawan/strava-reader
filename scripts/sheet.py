@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """Mirror the synced data into a Google Sheet, one tab per view.
 
-Every run rebuilds every tab from data/ and rewrites it whole (clear, then
-write), so the sheet can never collect duplicate rows: each activity appears
-once in Aktivitas / Data alat (FIT), each kept run once in Analisis lari, and
-rerunning changes nothing. The rows go to reports/sheet.json; --push POSTs
-them to the small Apps Script web app bound to the sheet (sheets/webapp.gs),
-which clears each tab and writes it whole — a plain HTTPS POST to Apps
-Script, no LLM in the loop, so a sync costs no model tokens. The web app
-answers with every cell it wrote, which --push then checks against the data,
-cell by cell. One-time setup is in README step 7; .env:
+Every run rebuilds every tab from data/ and rewrites it whole, so the sheet
+can never collect duplicate rows: each activity appears once in Aktivitas /
+Data alat (FIT), each kept run once in Analisis lari, and rerunning changes
+nothing. The rows go to reports/sheet.json; --push POSTs them to the small
+Apps Script web app bound to the sheet (sheets/webapp.gs), which writes
+every tab to a hidden staging copy first and only then overwrites the live
+tabs (one push at a time) — a plain HTTPS POST to Apps Script, no LLM in the
+loop, so a sync costs no model tokens. The web app answers with every cell
+it wrote, which --push then checks against the data, cell by cell. One-time
+setup is in README step 7; .env:
 
-    STRAVA_SHEET_ID=<the id in the sheet's URL>
+    STRAVA_SHEET_ID=<the id in the sheet's URL, same as the SPREADSHEET_ID script property>
     STRAVA_SHEET_URL=<the web app /exec URL>
     STRAVA_SHEET_TOKEN=<the shared secret, same as the TOKEN script property>
 
 Values go out raw (numbers, strings, booleans) with a number format per
-column, so the sheet can sort and sum them. Stdlib only.
+column, so the sheet can sort and sum them. Text is always text: a name like
+"=1+1" stays literal; the only formulas are the ones built here (Formula),
+sent apart from the values. Stdlib only.
 """
 import json
 import re
@@ -30,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import fit  # noqa: E402
 import story  # noqa: E402
-from analyze import (ACTIVITIES_FILE, DUP_WINDOW_S, FIT_DIR, GPX_DIR, REPORTS, ROOT,  # noqa: E402
+from analyze import (ACTIVITIES_FILE, FIT_DIR, GPX_DIR, REPORTS, ROOT,  # noqa: E402
                      dedupe, gpx_has_hr, read_activities)
 from config import DATA_SINCE, in_scope  # noqa: E402
 
@@ -47,7 +50,16 @@ SUB_SPORTS = {1: "treadmill", 2: "street", 3: "trail", 4: "track", 27: "indoor_w
 EPOCH = datetime(1899, 12, 30)    # spreadsheet day 0
 
 F_ID, F_DT, F_DATE, F_HMS, F_MS, F_PCT = "0", "yyyy-mm-dd hh:mm", "yyyy-mm-dd", "[h]:mm:ss", "[m]:ss", "0%"
-WEBAPP_V = 2                       # VERSION in sheets/webapp.gs; bump both together
+WEBAPP_V = 3                       # VERSION in sheets/webapp.gs; bump both together
+
+
+class Formula(str):
+    """A cell the web app writes as a formula; shows is what it reads back as."""
+
+    def __new__(cls, text, shows):
+        f = super().__new__(cls, text)
+        f.shows = shows
+        return f
 
 
 def serial(d):
@@ -68,23 +80,14 @@ def opt(x, nd=None):
 
 
 def session(path):
-    """FIT session message fields by number, or {} without a FIT file."""
+    """FIT session message fields by number, or {} without a usable FIT file."""
     if not path.exists():
         return {}, {}
-    msgs = fit.messages(path.read_bytes())
+    try:
+        msgs = fit.messages(path.read_bytes())
+    except fit.FitError:
+        return {}, {}
     return (next((v for g, v in msgs if g == 0), {}), next((v for g, v in msgs if g == 18), {}))
-
-
-def duplicates_of(acts, kept):
-    """{id of a dropped duplicate upload: id of the copy that was kept}."""
-    kept_ids = {a["id"] for a in kept}
-    out = {}
-    for d in acts:
-        if d["id"] not in kept_ids:
-            k = next(k for k in kept if k["type"] == d["type"]
-                     and abs((k["start"] - d["start"]).total_seconds()) < DUP_WINDOW_S)
-            out[d["id"]] = k["id"]
-    return out
 
 
 def fastest(pts, meters):
@@ -101,12 +104,20 @@ def fastest(pts, meters):
 
 
 def split_parts(r):
-    """First 60% / last 40% of the distance: (pace s/km, mean HR) of each."""
+    """First 60% / last 40% of the distance: (pace s/km, mean HR) of each.
+
+    A part without distance or time (a short or sparse track) has pace None;
+    a part without HR samples has HR None."""
     pts, total = r["pts"], r["pts"][-1]["d"]
+    if total <= 0:
+        return None, None, None, None
     k = next(i for i, p in enumerate(pts) if p["d"] >= 0.6 * total)
     a, b = pts[:k], pts[k:]
-    first = pts[k]["s"] / (pts[k]["d"] / 1000)
-    last = (pts[-1]["s"] - pts[k]["s"]) / ((total - pts[k]["d"]) / 1000)
+
+    def pace(ds, s):
+        return s / (ds / 1000) if ds > 0 and s > 0 else None
+    first = pace(pts[k]["d"] - pts[0]["d"], pts[k]["s"] - pts[0]["s"])
+    last = pace(total - pts[k]["d"], pts[-1]["s"] - pts[k]["s"])
     hr = [statistics.mean(h) if h else None for h in ([p["hr"] for p in a if p["hr"]],
                                                        [p["hr"] for p in b if p["hr"]])]
     return first, last, hr[0], hr[1]
@@ -114,7 +125,8 @@ def split_parts(r):
 
 def decoupling(r):
     """Aerobic decoupling: efficiency (speed / mean HR) of the first half of the
-    elapsed time over the second half, minus 1. None for short or HR-less runs."""
+    elapsed time over the second half, minus 1. None for short or HR-less runs,
+    and when either half has no HR, distance or time."""
     pts = r["pts"]
     if not r["has_hr"] or r["total_s"] < DECOUPLE_MIN_S:
         return None
@@ -122,8 +134,11 @@ def decoupling(r):
     k = next(i for i, p in enumerate(pts) if p["s"] >= mid)
 
     def ef(x):
-        return ((x[-1]["d"] - x[0]["d"]) / (x[-1]["s"] - x[0]["s"])) / statistics.mean(p["hr"] for p in x if p["hr"])
-    return ef(pts[:k + 1]) / ef(pts[k:]) - 1
+        hrs = [p["hr"] for p in x if p["hr"]]
+        dt, dd = x[-1]["s"] - x[0]["s"], x[-1]["d"] - x[0]["d"]
+        return (dd / dt) / statistics.mean(hrs) if hrs and dt > 0 and dd > 0 else None
+    a, b = ef(pts[:k + 1]), ef(pts[k:])
+    return a / b - 1 if a and b else None
 
 
 def cadence(aid):
@@ -148,8 +163,8 @@ def build(now=None):
             has_hr[a["id"]] = gpx_has_hr(GPX_DIR / f"{a['id']}.gpx")
         return has_hr[a["id"]]
 
-    kept, merged = dedupe(acts, has_hr=hr_of)
-    dup_of = duplicates_of(acts, kept)
+    kept, dup_of = dedupe(acts, has_hr=hr_of)
+    merged = len(dup_of)
     by_id = {a["id"]: a for a in acts}
 
     # Aktivitas + Data alat (FIT): every activity, duplicates included and marked.
@@ -167,7 +182,7 @@ def build(now=None):
             dur(moving / a["km"]) if a["km"] else "", round(a["elev"], 1),
             a["trainer"], a["commute"], m["private"], m["visibility"], m["has_latlng"],
             m["bike_id"] or "", device, m["selected_tag_type"] or "", dup_of.get(a["id"], ""),
-            f'=HYPERLINK("https://www.strava.com/activities/"&A{len(aktivitas) + 2},"buka")'])
+            Formula(f'=HYPERLINK("https://www.strava.com/activities/"&A{len(aktivitas) + 2},"buka")', "buka")])
         if not s:
             continue
         strava_km = a.get("strava_km", a["km"])
@@ -182,9 +197,11 @@ def build(now=None):
             opt(s.get(18)), opt(s.get(19)), opt(s.get(20)), opt(s.get(21)), opt(s.get(22)), opt(s.get(23)),
             opt(s.get(26)), SUB_SPORTS.get(s.get(6), ""), opt(s.get(10))])
 
-    # Analisis lari + Split per km: the runs story.html reads, duplicates merged.
-    runs = sorted((story.analyse(a) for a in kept if a["start"] >= story.SINCE and a["type"] == "Run"
-                   and not a["trainer"] and (GPX_DIR / f"{a['id']}.gpx").exists()), key=lambda r: r["start"])
+    # Analisis lari + Split per km: the runs story.html reads, duplicates merged;
+    # a run whose GPX holds no usable track (story.analyse -> None) has no row.
+    outdoor = [a for a in kept if a["start"] >= story.SINCE and a["type"] == "Run" and not a["trainer"]]
+    runs = sorted((r for r in (story.analyse(a) for a in outdoor if (GPX_DIR / f"{a['id']}.gpx").exists()) if r),
+                  key=lambda r: r["start"])
     phone_km = {k: by_id[d]["km"] for d, k in dup_of.items()}
     analisis, splits = [], []
     for r in runs:
@@ -207,15 +224,16 @@ def build(now=None):
             splits.append([int(r["id"]), serial(r["start"].date()), sp["km"], dur(sp["s"]),
                            "" if sp["hr"] is None else round(sp["hr"]), round(sp["gain"], 1)])
 
-    # Mingguan: the same runs per Monday-week, with the acute:chronic ratio.
+    # Mingguan: every kept outdoor run per Monday-week (GPX or not), with the
+    # acute:chronic ratio.
     weeks, w = [], story.monday(story.SINCE)
     while w <= story.monday(now):
         weeks.append(w)
         w += timedelta(days=7)
     wk = {w: [] for w in weeks}
-    for r in runs:
-        wk[story.monday(r["start"])].append(r)
-    km = [sum(r["km"] for r in wk[w]) for w in weeks]
+    for a in outdoor:
+        wk[story.monday(a["start"])].append(a)
+    km = [sum(a["km"] for a in wk[w]) for w in weeks]
     mingguan = []
     for i, w in enumerate(weeks):
         row = [serial(w), len(wk[w]), round(km[i], 1), dur(sum(r["moving_s"] for r in wk[w])),
@@ -244,8 +262,8 @@ def build(now=None):
                           "paruh pertama waktu dibanding paruh kedua, minus 1; hanya untuk lari >= 30 menit."],
         ["Split per km", "Waktu per km dari GPS jam/HP, termasuk berhenti. Untuk lari yang GPS jamnya macet, dari kecepatan "
                          "jam (perkiraan, bisa meleset sekitar 1 menit per km)."],
-        ["Mingguan", "Rasio beban = km minggu itu dibagi rata-rata 4 minggu sebelumnya. Patokan umum 0,8-1,3 aman, "
-                     "di atas 1,5 rawan."],
+        ["Mingguan", "Semua lari luar ruangan setelah duplikat digabung, ada GPX atau tidak. Rasio beban = km minggu "
+                     "itu dibagi rata-rata 4 minggu sebelumnya. Patokan umum 0,8-1,3 aman, di atas 1,5 rawan."],
         ["Privasi", "Sheet ini tidak berisi koordinat GPS atau gambar peta. Tetap jangan dibagikan sembarangan."],
     ]
 
@@ -294,22 +312,27 @@ def col(n):
 
 def payload(tabs, sheet_id):
     """reports/sheet.json, and what --push POSTs: one entry per tab with the
-    raw values (numbers, strings, booleans — nothing is UI-parsed) and the
-    per-column number formats the web app applies."""
-    return {"spreadsheetId": sheet_id,
-            "tabs": [{"name": t["name"], "formats": t["formats"], "values": [t["header"]] + t["rows"]}
-                     for t in tabs]}
+    raw values (numbers, strings, booleans — text is written as text, never
+    run as a formula), the per-column number formats the web app applies,
+    and the formula cells apart as [row, column, formula] (1-based, header =
+    row 1), which hold "" in values."""
+    out = []
+    for t in tabs:
+        formulas = [[i + 2, j + 1, str(v)] for i, r in enumerate(t["rows"])
+                    for j, v in enumerate(r) if isinstance(v, Formula)]
+        values = [list(t["header"])] + [["" if isinstance(v, Formula) else v for v in r] for r in t["rows"]]
+        out.append({"name": t["name"], "formats": t["formats"], "values": values, "formulas": formulas})
+    return {"spreadsheetId": sheet_id, "tabs": out}
 
 
 def shown(v):
-    """What the web app reads back for a cell: the raw value, except a formula
-    (=HYPERLINK reads back as its computed label) and an all-digit string,
+    """What the web app reads back for a cell: the raw value, except a
+    Formula (reads back as its computed value) and an all-digit string,
     which Apps Script writes as a number."""
-    if isinstance(v, str):
-        if v.startswith("=HYPERLINK"):
-            return "buka"
-        if v.isdigit():
-            return int(v)
+    if isinstance(v, Formula):
+        return v.shows
+    if isinstance(v, str) and v.isdigit():
+        return int(v)
     return v
 
 
@@ -356,13 +379,13 @@ def check(tabs, readback):
 
 def push(tabs, sheet_id):
     """POST every tab to the web app bound to the sheet (sheets/webapp.gs),
-    which clears and rewrites each one whole, then check what the sheet
+    which stages and then rewrites each one whole, then check what the sheet
     reads back against the data, cell by cell."""
     e = env()
     url, token = e.get("STRAVA_SHEET_URL"), e.get("STRAVA_SHEET_TOKEN")
     if not url or not token:
         sys.exit(f"STRAVA_SHEET_URL / STRAVA_SHEET_TOKEN missing in {ENV_FILE} (one-time setup, README step 7)")
-    body = json.dumps({"token": token, **payload(tabs, sheet_id)}, ensure_ascii=False).encode()
+    body = json.dumps({"token": token, "v": WEBAPP_V, **payload(tabs, sheet_id)}, ensure_ascii=False).encode()
     out, err = None, ""
     for _ in (1, 2):                    # one retry, like the run before it
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})

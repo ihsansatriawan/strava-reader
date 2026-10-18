@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fit  # noqa: E402
-from analyze import DUP_WINDOW_S, GPX_DIR, dedupe, gpx_has_hr, read_activities  # noqa: E402
+from analyze import GPX_DIR, dedupe, gpx_has_hr, read_activities  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
@@ -178,7 +178,12 @@ def place_of(lat, lon):
 
 
 def analyse(a):
+    """The run's track read point by point, or None when the GPX holds no
+    usable track (fewer than two points, no distance or no time) - the
+    activity's summary still counts in the totals."""
     pts, retimed = track(GPX_DIR / f"{a['id']}.gpx", a.get("device"))
+    if len(pts) < 2 or pts[-1]["d"] <= 0 or pts[-1]["s"] <= 0:
+        return None
     sl = slices(pts)
     total = sum(s["dur"] for s in sl)
     moving = [s for s in sl if s["m"] / s["dur"] >= WALK_SPEED]
@@ -203,17 +208,32 @@ def analyse(a):
 
 
 def splits(pts):
-    """Full kilometres: elapsed seconds, mean HR, metres climbed."""
-    out, k, j0 = [], 1, 0
-    for j, p in enumerate(pts):
-        if p["d"] >= k * 1000:
-            seg = pts[j0:j + 1]
-            hrs = [q["hr"] for q in seg if q["hr"]]
-            gain = sum(max(0.0, seg[i]["ele"] - seg[i - 1]["ele"]) for i in range(1, len(seg))
-                       if seg[i]["ele"] is not None and seg[i - 1]["ele"] is not None)
-            out.append({"km": k, "s": p["s"] - pts[j0]["s"],
-                        "hr": statistics.mean(hrs) if hrs else None, "gain": gain})
-            k, j0 = k + 1, j
+    """Full kilometres: elapsed seconds, mean HR, metres climbed.
+
+    Each kilometre ends exactly where the track crosses it, interpolated
+    between the samples on either side (several kilometres can fall between
+    two samples). HR is the mean of the real samples inside that km."""
+    def cut(a, b, d):
+        f = (d - a["d"]) / (b["d"] - a["d"])
+        ele = (a["ele"] + f * (b["ele"] - a["ele"])
+               if a["ele"] is not None and b["ele"] is not None else None)
+        return {"d": d, "s": a["s"] + f * (b["s"] - a["s"]), "ele": ele, "hr": None}
+
+    def close(seg):
+        hrs = [q["hr"] for q in seg if q["hr"]]
+        gain = sum(max(0.0, seg[i]["ele"] - seg[i - 1]["ele"]) for i in range(1, len(seg))
+                   if seg[i]["ele"] is not None and seg[i - 1]["ele"] is not None)
+        return {"km": k, "s": seg[-1]["s"] - seg[0]["s"],
+                "hr": statistics.mean(hrs) if hrs else None, "gain": gain}
+
+    out, k, seg = [], 1, pts[:1]
+    for a, b in zip(pts, pts[1:]):
+        while b["d"] > a["d"] and b["d"] >= k * 1000:
+            x = b if b["d"] == k * 1000 else cut(a, b, k * 1000)  # a sample on the mark is the mark
+            out.append(close(seg + [x]))
+            k, seg = k + 1, [x]
+        if seg[-1] is not b:
+            seg.append(b)
     return out
 
 
@@ -549,8 +569,9 @@ def chart_week(runs, weeks, today):
 
 
 def chart_hours(runs):
+    """Bars per start hour: 04-19 always, widened to every hour that has a run."""
     hours = Counter(r["start"].hour for r in runs)
-    h0, h1 = 4, 20
+    h0, h1 = min(4, min(hours)), max(20, max(hours) + 1)
     X0, X1, Y0, Y1 = 30, 420, 44, 204
     top = max(hours.values())
     bw = (X1 - X0) / (h1 - h0)
@@ -576,74 +597,90 @@ def chart_hours(runs):
 # ---------------- 7. longest run ----------------
 
 def chart_longest(r, sp):
-    X0, X1 = 64, 900
-    A0, A1, B0, B1, C0, C1 = 40, 160, 214, 316, 370, 450
+    """Up to three panels on one distance axis: time per km (needs a full km),
+    heart rate, elevation (needs elevation in the GPX). A panel without data
+    is left out and the ones below move up."""
+    X0, X1, GAP = 64, 900, 54
     dmax = r["dist"] / 1000
 
     def X(km):
         return X0 + km / dmax * (X1 - X0)
 
-    b = []
-    # A: time per km
-    ss = [s["s"] for s in sp]
-    lo, hi = math.floor((min(ss) - 20) / 60) * 60, math.ceil((max(ss) + 20) / 60) * 60
-
-    def YA(s):
-        return A0 + (s - lo) / (hi - lo) * (A1 - A0)
-
-    b.append(T(X0, A0 - 18, "waktu per km (termasuk berhenti) · makin atas makin cepat", "pt"))
-    for s in range(lo, hi + 1, 60):
-        b.append(hline(X0, X1, YA(s)))
-        b.append(T(X0 - 10, YA(s) + 4, mmss(s), anchor="end"))
-    b.append('<polyline class="line" points="' + " ".join(f"{X(s['km'] - 0.5):.1f},{YA(s['s']):.1f}" for s in sp) + '"/>')
-    slow, fast = max(sp, key=lambda s: s["s"]), min(sp, key=lambda s: s["s"])
-    for s in sp:
-        b.append(dot(X(s["km"] - 0.5), YA(s["s"]), "hl"))
-    b.append(T(X(slow["km"] - 0.5), YA(slow["s"]) + 18, f"km {slow['km']}: {mmss(slow['s'])} · +{slow['gain']:.0f} m", "val", "middle"))
-    b.append(T(X(fast["km"] - 0.5), YA(fast["s"]) - 10, f"km {fast['km']}: {mmss(fast['s'])}", "val", "middle"))
-    # B: heart rate
     sl = [s for s in r["slices"] if s["hr"]]
     sm = [(sl[i]["d"] / 1000, statistics.mean(x["hr"] for x in sl[max(0, i - 2):i + 3])) for i in range(len(sl))]
-    hlo, hhi = math.floor((min(h for _, h in sm) - 4) / 10) * 10, math.ceil((max(h for _, h in sm) + 4) / 10) * 10
-
-    def YB(h):
-        return B1 - (h - hlo) / (hhi - hlo) * (B1 - B0)
-
-    b.append(T(X0, B0 - 18, "detak jantung (bpm)", "pt"))
-    for h in range(hlo, hhi + 1, 10):
-        b.append(hline(X0, X1, YB(h)))
-        b.append(T(X0 - 10, YB(h) + 4, str(h), anchor="end"))
-    b.append('<polyline class="line" points="' + " ".join(f"{X(d):.1f},{YB(h):.1f}" for d, h in sm) + '"/>')
-    # C: elevation
     ep, last = [], None
     for p in r["pts"]:
         if p["ele"] is not None and (last is None or p["d"] - last >= 50):
             ep.append((p["d"] / 1000, p["ele"]))
             last = p["d"]
-    elo, ehi = min(e for _, e in ep), max(e for _, e in ep)
+    y, spans = 40, {}
+    for name, h, has in (("A", 120, sp), ("B", 102, sm), ("C", 80, ep)):
+        if has:
+            spans[name] = (y, y + h)
+            y += h + GAP
+    if not spans:
+        return ""
+    top, bottom = min(a for a, _ in spans.values()), max(b for _, b in spans.values())
 
-    def YC(e):
-        return C1 - (e - elo) / max(1, ehi - elo) * (C1 - C0)
+    b = []
+    if "A" in spans:  # time per km
+        A0, A1 = spans["A"]
+        ss = [s["s"] for s in sp]
+        lo, hi = math.floor((min(ss) - 20) / 60) * 60, math.ceil((max(ss) + 20) / 60) * 60
 
-    gain = sum(s["gain"] for s in sp)
-    b.append(T(X0, C0 - 18, f"elevasi · naik total {gain:.0f} m", "pt"))
-    b.append(hline(X0, X1, C1, "axis"))
-    pl = " ".join(f"{X(d):.1f},{YC(e):.1f}" for d, e in ep)
-    b.append(f'<polygon class="area" points="{X(ep[0][0]):.1f},{C1} {pl} {X(ep[-1][0]):.1f},{C1}"/>')
-    b.append(f'<polyline class="line" points="{pl}"/>')
-    b.append(T(X0 - 10, YC(ehi) + 4, f"{ehi:.0f} m", anchor="end"))
-    b.append(T(X0 - 10, YC(elo) + 4, f"{elo:.0f} m", anchor="end"))
+        def YA(s):
+            return A0 + (s - lo) / (hi - lo) * (A1 - A0)
+
+        b.append(T(X0, A0 - 18, "waktu per km (termasuk berhenti) · makin atas makin cepat", "pt"))
+        for s in range(lo, hi + 1, 60):
+            b.append(hline(X0, X1, YA(s)))
+            b.append(T(X0 - 10, YA(s) + 4, mmss(s), anchor="end"))
+        b.append('<polyline class="line" points="' + " ".join(f"{X(s['km'] - 0.5):.1f},{YA(s['s']):.1f}" for s in sp) + '"/>')
+        slow, fast = max(sp, key=lambda s: s["s"]), min(sp, key=lambda s: s["s"])
+        for s in sp:
+            b.append(dot(X(s["km"] - 0.5), YA(s["s"]), "hl"))
+        b.append(T(X(slow["km"] - 0.5), YA(slow["s"]) + 18, f"km {slow['km']}: {mmss(slow['s'])} · +{slow['gain']:.0f} m", "val", "middle"))
+        b.append(T(X(fast["km"] - 0.5), YA(fast["s"]) - 10, f"km {fast['km']}: {mmss(fast['s'])}", "val", "middle"))
+    if "B" in spans:  # heart rate
+        B0, B1 = spans["B"]
+        hlo, hhi = math.floor((min(h for _, h in sm) - 4) / 10) * 10, math.ceil((max(h for _, h in sm) + 4) / 10) * 10
+
+        def YB(h):
+            return B1 - (h - hlo) / (hhi - hlo) * (B1 - B0)
+
+        b.append(T(X0, B0 - 18, "detak jantung (bpm)", "pt"))
+        for h in range(hlo, hhi + 1, 10):
+            b.append(hline(X0, X1, YB(h)))
+            b.append(T(X0 - 10, YB(h) + 4, str(h), anchor="end"))
+        b.append('<polyline class="line" points="' + " ".join(f"{X(d):.1f},{YB(h):.1f}" for d, h in sm) + '"/>')
+    if "C" in spans:  # elevation
+        C0, C1 = spans["C"]
+        elo, ehi = min(e for _, e in ep), max(e for _, e in ep)
+
+        def YC(e):
+            return C1 - (e - elo) / max(1, ehi - elo) * (C1 - C0)
+
+        gain = sum(s["gain"] for s in sp)
+        b.append(T(X0, C0 - 18, f"elevasi · naik total {gain:.0f} m", "pt"))
+        b.append(hline(X0, X1, C1, "axis"))
+        pl = " ".join(f"{X(d):.1f},{YC(e):.1f}" for d, e in ep)
+        b.append(f'<polygon class="area" points="{X(ep[0][0]):.1f},{C1} {pl} {X(ep[-1][0]):.1f},{C1}"/>')
+        b.append(f'<polyline class="line" points="{pl}"/>')
+        b.append(T(X0 - 10, YC(ehi) + 4, f"{ehi:.0f} m", anchor="end"))
+        b.append(T(X0 - 10, YC(elo) + 4, f"{elo:.0f} m", anchor="end"))
     for k in range(0, int(dmax) + 1):
-        b.append(T(X(k), C1 + 18, f"{k}" + (" km" if k == int(dmax) else ""), anchor="middle"))
-    b.append(f'<line class="xhair" x1="0" x2="0" y1="{A0 - 6}" y2="{C1}"/>')
+        b.append(T(X(k), bottom + 18, f"{k}" + (" km" if k == int(dmax) else ""), anchor="middle"))
+    b.append(f'<line class="xhair" x1="0" x2="0" y1="{top - 6}" y2="{bottom}"/>')
     # crosshair rows every 100 m
     rows, k = [], 0
     by_km = {s["km"]: s for s in sp}
     for i, p in enumerate(r["pts"]):
         if p["d"] >= k * 100:
-            hr = next((h for d, h in sm if d * 1000 >= p["d"]), sm[-1][1])
             s = by_km.get(int(p["d"] // 1000) + 1)
-            lines = [f"km {num(p['d'] / 1000)}", f"HR {hr:.0f} bpm"]
+            lines = [f"km {num(p['d'] / 1000)}"]
+            if sm:
+                hr = next((h for d, h in sm if d * 1000 >= p["d"]), sm[-1][1])
+                lines.append(f"HR {hr:.0f} bpm")
             if p["ele"] is not None:
                 lines.append(f"elevasi {p['ele']:.0f} m")
             if s:
@@ -651,7 +688,7 @@ def chart_longest(r, sp):
             rows.append([round(p["d"] / 1000, 2)] + lines)
             k += 1
     cfg = json.dumps({"x0": X0, "x1": X1, "dmax": round(dmax, 3), "rows": rows}, ensure_ascii=False)
-    return svg(W, C1 + 26, "".join(b), "Waktu per km, detak jantung, dan elevasi lari terjauh",
+    return svg(W, bottom + 26, "".join(b), "Waktu per km, detak jantung, dan elevasi lari terjauh",
                f' data-xhair="{esc(cfg)}"')
 
 
@@ -849,12 +886,18 @@ def build():
         return has_hr[a["id"]]
 
     in_window = [a for a in raw_acts if a["start"] >= SINCE]
-    kept, merged = dedupe(in_window, has_hr=hr_of)
+    kept, dup_of = dedupe(in_window, has_hr=hr_of)
+    merged = len(dup_of)
     raw_runs = [a for a in in_window if a["type"] == "Run"]
-    runs = sorted((analyse(a) for a in kept if a["type"] == "Run" and not a["trainer"]
-                   and (GPX_DIR / f"{a['id']}.gpx").exists()), key=lambda r: r["start"])
+    # Totals, weekly load and the calendar count every kept outdoor run;
+    # only the point-by-point sections need a usable GPX track (runs).
+    outdoor = [a for a in kept if a["type"] == "Run" and not a["trainer"]]
+    runs = sorted((r for r in (analyse(a) for a in outdoor if (GPX_DIR / f"{a['id']}.gpx").exists()) if r),
+                  key=lambda r: r["start"])
     if len(runs) < 3:
         raise SystemExit("not enough runs since SINCE yet")
+    tracked = {r["id"]: r for r in runs}
+    summ = sorted((tracked.get(a["id"], {**a, "place": OTHER}) for a in outdoor), key=lambda r: r["start"])
     hr_runs = [r for r in runs if r["has_hr"]]
     now = datetime.now()
     today = now.date()
@@ -865,33 +908,28 @@ def build():
         weeks.append(w)
         w += timedelta(days=7)
     wk_km = {w: 0.0 for w in weeks}
-    for r in runs:
+    for r in summ:
         wk_km[monday(r["start"])] += r["km"]
 
     # 1. honest totals
-    kept_ids = {a["id"] for a in kept}
-    pairs = []
-    for d in raw_runs:
-        if d["id"] in kept_ids:
-            continue
-        k = next(k for k in kept if k["type"] == d["type"]
-                 and abs((k["start"] - d["start"]).total_seconds()) < DUP_WINDOW_S)
-        pairs.append((k, d))
-    pairs.sort(key=lambda p: p[0]["start"])
+    by_id = {a["id"]: a for a in in_window}
+    pairs = sorted(((by_id[k], by_id[d]) for d, k in dup_of.items() if by_id[d]["type"] == "Run"),
+                   key=lambda p: p[0]["start"])
     watchy = all(hr_of(k) and not hr_of(d) for k, d in pairs)
     labels = ("jam · dipakai", "HP · dibuang") if watchy else ("dipakai", "dibuang")
-    km_all = sum(r["km"] for r in runs)
+    km_all = sum(r["km"] for r in summ)
     km_raw = sum(a["km"] for a in raw_runs if not a["trainer"])
-    hours = sum(r["moving_s"] for r in runs) / 3600
-    longest = max(runs, key=lambda r: r["km"])
+    hours = sum(r["moving_s"] for r in summ) / 3600
+    longest = max(summ, key=lambda r: r["km"])
+    no_gpx = len(summ) - len(runs)
     span = f"{BULAN_PANJANG[SINCE.month]} – {BULAN_PANJANG[today.month]} {today.year}"
     hero = f"""
     <div class="hero">
       <div class="tile big"><div class="k">Total lari sejak {tgl(SINCE)}</div><div class="v">{num(km_all)} km</div>
         <div class="d">bukan {num(km_raw)} km · {len(pairs)} lari tercatat dua kali, sekarang digabung</div></div>
-      <div class="tile"><div class="k">Lari</div><div class="v">{len(runs)}</div><div class="d">{len(hr_runs)} dengan detak jantung</div></div>
-      <div class="tile"><div class="k">Waktu bergerak</div><div class="v">{num(hours)} jam</div><div class="d">rata-rata {mmss(hours * 3600 / km_all)} /km</div></div>
-      <div class="tile"><div class="k">Terjauh</div><div class="v">{num(longest['km'])} km</div><div class="d">{tgl(longest['start'])} · {esc(longest['place'])}</div></div>
+      <div class="tile"><div class="k">Lari</div><div class="v">{len(summ)}</div><div class="d">{len(hr_runs)} dengan detak jantung{f" · {no_gpx} tanpa GPX" if no_gpx else ""}</div></div>
+      <div class="tile"><div class="k">Waktu bergerak</div><div class="v">{num(hours)} jam</div><div class="d">rata-rata {mmss(hours * 3600 / km_all) if km_all else "-"} /km</div></div>
+      <div class="tile"><div class="k">Terjauh</div><div class="v">{num(longest['km'])} km</div><div class="d">{tgl(longest['start'])}{f" · {esc(longest['place'])}" if longest["id"] in tracked else ""}</div></div>
       <div class="tile"><div class="k">Minggu ini</div><div class="v">{num(wk_km[weeks[-1]])} km</div><div class="d">minggu {tgl(weeks[-1])}</div></div>
     </div>"""
     out = []
@@ -941,15 +979,15 @@ def build():
                        + (f"{sum(r['retimed'] for r in runs)} lari yang GPS jamnya macet dihitung dari kecepatan "
                           "yang dicatat jam: totalnya pas, tapi per km-nya perkiraan." if any(r["retimed"] for r in runs) else "")))
 
-    # 3. same heart
+    # 3. same heart: needs two months with at least two runs in the band each
     paced = [r for r in hr_runs if r["pace_hr"]]
-    if len(paced) >= 4:
+    by_m = defaultdict(list)
+    for r in paced:
+        by_m[(r["start"].year, r["start"].month)].append(r["pace_hr"])
+    med_m = [(m, statistics.median(v), len(v)) for (y_, m), v in sorted(by_m.items()) if len(v) >= 2]
+    if len(paced) >= 4 and len(med_m) >= 2:
         recent = [r for r in paced if r["start"].date() >= today - timedelta(days=28)]
         hl_place = (Counter(r["place"] for r in recent if r["place"] != OTHER).most_common(1) or [(paced[-1]["place"], 0)])[0][0]
-        by_m = defaultdict(list)
-        for r in paced:
-            by_m[(r["start"].year, r["start"].month)].append(r["pace_hr"])
-        med_m = [(m, statistics.median(v), len(v)) for (y_, m), v in sorted(by_m.items()) if len(v) >= 2]
         solid = [x for x in med_m if x[2] >= 3]
         first, last = (solid[0], solid[-1]) if len(solid) >= 2 else (med_m[0], med_m[-1])
         gain = first[1] - last[1]
@@ -1048,26 +1086,26 @@ def build():
                        "Tempat dicocokkan dari titik GPS pertama tiap lari (radius 1,5 km). Peta ini memperlihatkan "
                        "titik mulai di dekat rumah, jadi jangan dibagikan tanpa memotong awal dan akhir rute."))
 
-    # 6. when
-    per_day = Counter(r["start"].weekday() for r in runs)
+    # 6. when: every kept outdoor run, GPX or not
+    per_day = Counter(r["start"].weekday() for r in summ)
     topd, n_top = per_day.most_common(1)[0]
-    morning = sum(1 for r in runs if r["start"].hour < 8)
-    day_runs = [r for r in runs if r["start"].weekday() == topd]
+    morning = sum(1 for r in summ if r["start"].hour < 8)
+    day_runs = [r for r in summ if r["start"].weekday() == topd]
     dp, dn = Counter(r["place"] for r in day_runs).most_common(1)[0]
-    title = f"{n_top} dari {len(runs)} lari jatuh di hari {HARI_PANJANG[topd]}"
-    lead = (f"Itu <b>{n_top / len(runs) * 100:.0f}%</b> dari semua lari"
+    title = f"{n_top} dari {len(summ)} lari jatuh di hari {HARI_PANJANG[topd]}"
+    lead = (f"Itu <b>{n_top / len(summ) * 100:.0f}%</b> dari semua lari"
             + (f"; {dn} di antaranya mulai dari {dp}. " if dp != OTHER else ". ")
-            + f"<b>{morning} dari {len(runs)}</b> lari mulai sebelum jam 8 pagi.")
-    cal, wd = chart_week(runs, weeks, today)
+            + f"<b>{morning} dari {len(summ)}</b> lari mulai sebelum jam 8 pagi.")
+    cal, wd = chart_week(summ, weeks, today)
     out.append(section("kapan", "Kapan", title, lead,
-                       f'<div class="two">{cal}{chart_hours(runs)}</div>',
+                       f'<div class="two">{cal}{chart_hours(summ)}</div>',
                        table(["Hari", "#Lari"], [(HARI_PANJANG[d], str(per_day[d])) for d in range(7)], "Tabel per hari")
                        + table(["Jam mulai", "#Lari"], sorted((f"{h:02d}.00", str(n)) for h, n in
-                                                              Counter(r["start"].hour for r in runs).items()),
+                                                              Counter(r["start"].hour for r in summ).items()),
                                "Tabel jam mulai"),
                        fit=True))
 
-    # 7. longest run
+    # 7. longest run: each comparison only where both parts have the data
     if hr_runs:
         lr = max(hr_runs, key=lambda r: r["km"])
         sp = splits(lr["pts"])
@@ -1076,24 +1114,43 @@ def build():
         z_pts = [p for p in lr["pts"] if p["d"] > cut]
 
         def pace_of(ps):
-            return (ps[-1]["s"] - ps[0]["s"]) / ((ps[-1]["d"] - ps[0]["d"]) / 1000)
+            dt, dd = (ps[-1]["s"] - ps[0]["s"], ps[-1]["d"] - ps[0]["d"]) if ps else (0, 0)
+            return dt / (dd / 1000) if dt > 0 and dd > 0 else None
+
+        def hr_of_part(ps):
+            hrs = [p["hr"] for p in ps if p["hr"]]
+            return statistics.mean(hrs) if hrs else None
 
         pa, pz = pace_of(a_pts), pace_of(z_pts)
-        ha = statistics.mean(p["hr"] for p in a_pts if p["hr"])
-        hz = statistics.mean(p["hr"] for p in z_pts if p["hr"])
-        if pz - pa >= 15 and hz <= ha - 2:
+        ha, hz = hr_of_part(a_pts), hr_of_part(z_pts)
+        both_hr = ha is not None and hz is not None
+        if pa is None or pz is None:
+            title = f"{num(lr['km'])} km, lari terjauh dengan detak jantung"
+            why = ""
+        elif pz - pa >= 15 and both_hr and hz <= ha - 2:
             title = f"40% terakhir: pace melambat {secs(pz - pa)} per km, tapi HR justru turun {ha - hz:.0f} bpm"
-            why = "Kemungkinan yang capek kaki, bukan jantung, atau memang sengaja diperlambat."
-        elif pz - pa >= 15:
+            why = "Kemungkinan yang capek kaki, bukan jantung, atau memang sengaja diperlambat. "
+        elif pz - pa >= 15 and both_hr:
             title = f"40% terakhir: pace melambat {secs(pz - pa)} per km dan HR naik {hz - ha:.0f} bpm"
-            why = "Pola capek klasik: makin pelan tapi jantung makin kerja."
+            why = "Pola capek klasik: makin pelan tapi jantung makin kerja. "
+        elif pz - pa >= 15:
+            title = f"40% terakhir: pace melambat {secs(pz - pa)} per km"
+            why = ""
         else:
             title = f"Pace stabil sampai akhir ({mmss(pa)} → {mmss(pz)} /km)"
-            why = "Pembagian tenaganya rapi."
-        slow = max(sp, key=lambda s: s["s"])
-        lead = (f"{num(lr['km'])} km, {tgl(lr['start'])}, mulai dari {lr['place']}. 60% pertama <b>{mmss(pa)} /km</b> di HR "
-                f"<b>{ha:.0f}</b>, 40% terakhir <b>{mmss(pz)} /km</b> di HR <b>{hz:.0f}</b>. {why} "
-                f"Km paling lambat: km {slow['km']} ({mmss(slow['s'])}, naik {slow['gain']:.0f} m).")
+            why = "Pembagian tenaganya rapi. "
+
+        def part(name, p, h):
+            bits = ([f"<b>{mmss(p)} /km</b>"] if p is not None else []) + ([f"HR <b>{h:.0f}</b>"] if h is not None else [])
+            return f"{name} " + " di ".join(bits) if bits else ""
+        parts = [x for x in (part("60% pertama", pa, ha), part("40% terakhir", pz, hz)) if x]
+        lead = (f"{num(lr['km'])} km, {tgl(lr['start'])}, mulai dari {lr['place']}. "
+                + (", ".join(parts) + ". " if parts else "") + why)
+        if sp:
+            slow = max(sp, key=lambda s: s["s"])
+            lead += f"Km paling lambat: km {slow['km']} ({mmss(slow['s'])}, naik {slow['gain']:.0f} m)."
+        else:
+            lead += "Belum sampai 1 km penuh, jadi tidak ada waktu per km."
         out.append(section("terjauh", "Lari terjauh", title, lead, chart_longest(lr, sp),
                            table(["#Km", "#Waktu", "#HR", "#Naik"],
                                  [(str(s["km"]), mmss(s["s"]), f"{s['hr']:.0f}" if s["hr"] else "-", f"{s['gain']:.0f} m")
@@ -1126,8 +1183,8 @@ def build():
 <style>{CSS}</style></head>
 <body><div class="wrap">
   <p class="eyebrow">Cerita lari · Strava · {esc(span)}</p>
-  <h1>{num(km_all)} km dalam {len(runs)} lari sejak {BULAN_PANJANG[SINCE.month]}</h1>
-  <p class="sub">Data sinkron {esc(fetched)} · {len(runs)} lari sejak {tgl(SINCE)} {SINCE.year} · {len(hr_runs)} dengan detak jantung · dihitung dari setiap titik GPX</p>
+  <h1>{num(km_all)} km dalam {len(summ)} lari sejak {BULAN_PANJANG[SINCE.month]}</h1>
+  <p class="sub">Data sinkron {esc(fetched)} · {len(summ)} lari sejak {tgl(SINCE)} {SINCE.year} · {len(runs)} dengan GPX · {len(hr_runs)} dengan detak jantung · grafik dihitung dari setiap titik GPX</p>
   {hero}
   {"".join(out)}
   <footer>REA-STRAVA · STORY · DIBANGKITKAN {now:%Y-%m-%d %H:%M} · SUMBER: data/activities.json + GPX · {merged} UNGGAHAN GANDA DIGABUNG</footer>
