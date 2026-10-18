@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Weekly sync entry point (called by the LaunchAgent; cron-equivalent wrapper).
-# Runs fetch, analyze, the progress dashboard and the story page; a fetch failure (e.g.
-# session expired) does not block analysis of already-synced data.
+# Runs fetch, analyze, the progress dashboard, the story page and the Google Sheet
+# mirror; a fetch failure (e.g. session expired) does not block analysis of
+# already-synced data.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY=/opt/homebrew/bin/python3
@@ -13,4 +14,5 @@ fetch_rc=$?
 "$PY" -u scripts/analyze.py >> logs/cron.log 2>&1
 "$PY" -u scripts/progress.py >> logs/cron.log 2>&1
 "$PY" -u scripts/story.py >> logs/cron.log 2>&1
+"$PY" -u scripts/sheet.py --push >> logs/cron.log 2>&1
 echo "=== strava sync done fetch_rc=$fetch_rc $(date '+%F %T') ===" >> logs/cron.log

@@ -15,6 +15,7 @@ authenticated with your own session. No API keys, no OAuth apps, no subscription
 | `reports/report-<date>-<N>mo.md` | The same report for the last N months (`--months N`) |
 | `reports/progress.html` | Rolling dashboard of runs since June 2026: volume bars, pace trend, HR-efficiency scatter, distance per run, consistency calendar, computed insights |
 | `reports/story.html` | The story of every run since July 2026, read point by point from GPX (see below) |
+| Google Sheet | Optional mirror of the data in six tabs (activities, FIT device totals, run analysis, km splits, weekly load, notes), rewritten whole on every sync (see step 7) |
 | `diagrams/` | Three diagrams explaining exactly how the whole mechanism works |
 
 ## Data scope: 2026 only
@@ -193,7 +194,7 @@ rule.
 ### 6. Schedule it
 
 A macOS LaunchAgent runs the full pipeline (fetch → analyze → progress →
-story) **weekly, Sunday 22:00**. Set it up on the one machine that should
+story → sheet) **weekly, Sunday 22:00**. Set it up on the one machine that should
 sync. `scripts/sync.sh` calls `/opt/homebrew/bin/python3`; if `which python3`
 says otherwise on that machine, edit `PY` in `sync.sh` first.
 
@@ -233,6 +234,32 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.pl
   the next sync. On a machine that no longer syncs, stop it:
   `pkill -f -- "--user-data-dir=$PWD/chrome-data"`
 
+### 7. Mirror to a Google Sheet (optional)
+
+`scripts/sheet.py` rebuilds six tabs from `data/` (Aktivitas, Data alat
+(FIT), Analisis lari, Split per km, Mingguan, Catatan) and writes them to
+`reports/sheet.json`. With `--push` it POSTs them to a small Apps Script web
+app bound to the sheet, which **clears each tab and writes it whole**. No row
+is ever appended, so rerunning a sync cannot create duplicates. `sync.sh`
+runs it with `--push` after the story page.
+
+One-time setup:
+
+1. Put a random token in `.env` (ignored):
+   `STRAVA_SHEET_TOKEN=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")`
+   and the sheet's own id (the long id in its URL) as `STRAVA_SHEET_ID=...`.
+2. In the sheet: **Extensions → Apps Script**, paste `sheets/webapp.gs`, then set
+   the script property `TOKEN` (**Project Settings → Script Properties**) to
+   the same value.
+   Authorize, copy the `/exec` URL into `.env` as `STRAVA_SHEET_URL=...`. After
+   any later edit of `webapp.gs`, re-deploy with **Version: New version** —
+   `/exec` keeps running its pinned old code otherwise, and `--push` fails on
+   the version stamp (`v`) instead of writing wrong data.
+4. Test: `python3 scripts/sheet.py --push`.
+
+Tab "Analisis lari" uses `data/places.json` for the `tempat` column, like
+`story.html`.
+
 ## Known limitations
 
 - **Totals won't match the Strava app exactly.** The reports use the watch's
@@ -258,6 +285,8 @@ scripts/fit.py        # minimal FIT reader: device, session totals, speed series
 scripts/analyze.py    # markdown report (since DATA_SINCE or --months N), watch distance, duplicate merging
 scripts/progress.py   # progress.html dashboard (runs since June 2026)
 scripts/story.py      # story.html, GPX point-by-point story (runs since July 2026)
+scripts/sheet.py      # Google Sheet mirror: rebuilds every tab, rewrites it whole (--push)
+sheets/webapp.gs      # Apps Script receiver bound to the sheet
 scripts/sync.sh       # pipeline wrapper for the scheduler
 scripts/relogin.sh    # visible Chrome for the one manual login
 tests/                # python3 -m unittest discover -s tests
