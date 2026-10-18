@@ -92,7 +92,7 @@ dedicated Chrome profile (`chrome-data/`). `scripts/fetch.py`:
 ### 1. Clone the repo
 
 ```bash
-git clone <this-repo> && cd rea-strava
+git clone https://github.com/ihsansatriawan/strava-reader.git && cd strava-reader
 ```
 
 ### 2. Create the automation profile (`chrome-data/`)
@@ -193,7 +193,9 @@ rule.
 ### 6. Schedule it
 
 A macOS LaunchAgent runs the full pipeline (fetch → analyze → progress →
-story) **weekly, Sunday 22:00**:
+story) **weekly, Sunday 22:00**. Set it up on the one machine that should
+sync. `scripts/sync.sh` calls `/opt/homebrew/bin/python3`; if `which python3`
+says otherwise on that machine, edit `PY` in `sync.sh` first.
 
 ```bash
 cat > ~/Library/LaunchAgents/com.ihsan.strava-sync.plist <<'PLIST'
@@ -203,7 +205,7 @@ cat > ~/Library/LaunchAgents/com.ihsan.strava-sync.plist <<'PLIST'
 <dict>
     <key>Label</key><string>com.ihsan.strava-sync</string>
     <key>ProgramArguments</key>
-    <array><string>/absolute/path/to/rea-strava/scripts/sync.sh</string></array>
+    <array><string>/absolute/path/to/strava-reader/scripts/sync.sh</string></array>
     <key>StartCalendarInterval</key>
     <dict>
         <key>Weekday</key><integer>0</integer>
@@ -211,7 +213,7 @@ cat > ~/Library/LaunchAgents/com.ihsan.strava-sync.plist <<'PLIST'
         <key>Minute</key><integer>0</integer>
     </dict>
     <key>StandardErrorPath</key>
-    <string>/absolute/path/to/rea-strava/logs/launchd.err</string>
+    <string>/absolute/path/to/strava-reader/logs/launchd.err</string>
 </dict>
 </plist>
 PLIST
@@ -223,7 +225,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.pl
 - Logs: `logs/cron.log`
 - Change the schedule: edit `StartCalendarInterval` (`Weekday 0` = Sunday),
   then `launchctl bootout` + `bootstrap` again.
+- Pause it on this machine (survives reboots, keeps the plist):
+  `launchctl bootout gui/$(id -u)/com.ihsan.strava-sync && launchctl disable gui/$(id -u)/com.ihsan.strava-sync`.
+  Resume: `launchctl enable gui/$(id -u)/com.ihsan.strava-sync && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.plist`
 - Remove: `launchctl bootout gui/$(id -u)/com.ihsan.strava-sync && rm ~/Library/LaunchAgents/com.ihsan.strava-sync.plist`
+- `fetch.py` leaves its headless Chrome running (CDP on `127.0.0.1:9222`) for
+  the next sync. On a machine that no longer syncs, stop it:
+  `pkill -f -- "--user-data-dir=$PWD/chrome-data"`
 
 ## Known limitations
 
