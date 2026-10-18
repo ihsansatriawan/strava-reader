@@ -7,6 +7,9 @@ Endpoints (session-cookie authenticated, traced from the signed-in web app via C
   GET /activities/{id}/export_gpx           GPX (GPS + elevation + heart rate)
   GET /activities/{id}/streams              403 paywall (subscription-only) - not needed
 
+Scope: only activities starting on or after config.DATA_SINCE are stored and
+downloaded.
+
 Session: a dedicated headless Chrome on the cloned profile (chrome-data/)
 keeps the Strava login. Each run syncs its _strava4_session cookie and uses it
 for direct HTTP requests. If the session expired, writes data/SESSION_EXPIRED
@@ -23,6 +26,9 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from config import DATA_SINCE, in_scope  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -196,10 +202,11 @@ def fetch_summaries(cookie):
         page += 1
         time.sleep(0.3)
     seen = {}
-    for m in models:
+    for m in in_scope(models):
         seen[m["id_str"]] = m
     models = list(seen.values())
     ACTIVITIES_FILE.write_text(json.dumps({"fetched_at": now_iso(), "total": total,
+                                           "since": f"{DATA_SINCE:%Y-%m-%d}",
                                            "models": models}, indent=1))
     return models
 
@@ -262,7 +269,8 @@ def main():
     print(f"session synced {now_iso()}")
     try:
         models = fetch_summaries(cookie)
-        print(f"summaries: {len(models)} activities -> {ACTIVITIES_FILE.relative_to(ROOT)}")
+        print(f"summaries: {len(models)} activities since {DATA_SINCE:%Y-%m-%d} "
+              f"-> {ACTIVITIES_FILE.relative_to(ROOT)}")
         n = download_files(cookie, models)
         print(f"file sync complete: {n} activities processed")
     except SessionExpired as e:

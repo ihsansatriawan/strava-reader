@@ -13,9 +13,15 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+import fit  # noqa: E402
+from config import DATA_SINCE, in_scope, local_start  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 GPX_DIR = DATA / "gpx"
+FIT_DIR = DATA / "fit"
+MOVING_SPEED = {"Run": 1.0}  # m/s at or above which the device counts as moving; else 0.5
 REPORTS = ROOT / "reports"
 ACTIVITIES_FILE = DATA / "activities.json"
 EXPIRED_FILE = DATA / "SESSION_EXPIRED"
@@ -52,21 +58,79 @@ def gpx_stats(path):
             "max_hr": max(hrs) if hrs else None}
 
 
-def load():
+def gpx_has_hr(path):
+    return path.exists() and HR_RE.search(path.read_text(errors="replace")) is not None
+
+
+def use_device(a, fs):
+    """Prefer the recording device's own distance and moving time over Strava's GPS recount.
+
+    Strava's number stays in strava_km; the FIT summary rides along as device.
+    A recording made by Strava's phone app is left alone (same numbers).
+    """
+    if not fs or fs["manufacturer"] == fit.STRAVA_APP or not fs["km"]:
+        return a
+    a = dict(a, strava_km=a["km"], km=fs["km"], device=fs)
+    if fs["speed"]:
+        a["moving_s"] = fit.moving_seconds(fs, MOVING_SPEED.get(a["type"], 0.5))
+    return a
+
+
+DUP_WINDOW_S = 180
+
+
+def dedupe(acts, has_hr):
+    """Collapse one session uploaded twice (phone app + watch sync).
+
+    Same sport starting within DUP_WINDOW_S counts as one session. The copy
+    with heart rate wins, then the earlier upload. Returns (kept, n_merged),
+    kept in the input order.
+    """
+    groups = []
+    for a in sorted(acts, key=lambda a: a["start"]):
+        g = groups[-1] if groups else None
+        if g and g[0]["type"] == a["type"] and (a["start"] - g[0]["start"]).total_seconds() < DUP_WINDOW_S:
+            g.append(a)
+        else:
+            groups.append([a])
+    keep = set()
+    for g in groups:
+        if len(g) == 1:
+            keep.add(id(g[0]))
+        else:
+            keep.add(id(min(g, key=lambda a: (not has_hr(a), int(a["id"])))))
+    return [a for a in acts if id(a) in keep], len(acts) - len(keep)
+
+
+def read_activities():
+    """Return (fetched_at, every activity since DATA_SINCE newest first) - duplicates included.
+
+    Distance and moving time come from the recording device's FIT file when
+    there is one (see use_device); otherwise from Strava's summary.
+    """
     raw = json.loads(ACTIVITIES_FILE.read_text())
     acts = []
-    for m in raw["models"]:
-        acts.append({
+    for m in in_scope(raw["models"]):
+        a = {
             "id": m["id_str"], "name": m["name"], "type": m["sport_type"],
-            "start": datetime.fromtimestamp(m["start_date_local_raw"]),
+            "start": local_start(m["start_date_local_raw"]),
             "km": m["distance_raw"] / 1000,
             "moving_s": m["moving_time_raw"],
             "elapsed_s": m["elapsed_time_raw"],
             "elev": m["elevation_gain_raw"],
             "commute": m["commute"], "trainer": m["trainer"],
-        })
+        }
+        f = FIT_DIR / f"{a['id']}.fit"
+        acts.append(use_device(a, fit.summary(f) if f.exists() else None))
     acts.sort(key=lambda a: a["start"], reverse=True)
     return raw.get("fetched_at", "?"), acts
+
+
+def load():
+    """Return (fetched_at, activities newest first, n duplicate uploads merged)."""
+    fetched_at, acts = read_activities()
+    acts, merged = dedupe(acts, has_hr=lambda a: gpx_has_hr(GPX_DIR / f"{a['id']}.gpx"))
+    return fetched_at, acts, merged
 
 
 def iso_weeks_back(now, n):
@@ -106,11 +170,12 @@ def current_streak(acts):
     return streak
 
 
-def build_report(fetched_at, acts, scope="all-time"):
+def build_report(fetched_at, acts, scope=f"since {DATA_SINCE:%Y-%m-%d}", merged=0):
     now = datetime.now()
     L = []
     L.append(f"# Strava training report - {now:%Y-%m-%d} ({scope})")
-    L.append(f"_Data synced: {fetched_at}, {len(acts)} activities, window: {scope}_")
+    L.append(f"_Data synced: {fetched_at}, {len(acts)} activities, window: {scope}"
+             + (f", {merged} duplicate uploads merged (phone + watch)" if merged else "") + "_")
     if EXPIRED_FILE.exists():
         L.append("\n> WARNING: last fetch hit an expired session - run scripts/relogin.sh and re-fetch.")
     L.append("")
@@ -229,7 +294,7 @@ def main():
     if not ACTIVITIES_FILE.exists():
         raise SystemExit("no data yet - run scripts/fetch.py first")
     REPORTS.mkdir(parents=True, exist_ok=True)
-    fetched_at, acts = load()
+    fetched_at, acts, merged = load()
     if not acts:
         raise SystemExit("activities list is empty")
     months = None
@@ -245,7 +310,7 @@ def main():
         out = REPORTS / f"report-{datetime.now():%Y-%m-%d}-{months}mo.md"
         out.write_text(report)
     else:
-        report = build_report(fetched_at, acts)
+        report = build_report(fetched_at, acts, merged=merged)
         out = REPORTS / f"report-{datetime.now():%Y-%m-%d}.md"
         out.write_text(report)
         (REPORTS / "latest.md").write_text(report)

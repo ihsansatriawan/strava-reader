@@ -10,7 +10,6 @@ Charts (all inline SVG, no JS, design follows the diagram-design style guide):
   6. Consistency grid    - weeks x days, run days filled
   7. Insights            - computed, not hand-written
 """
-import json
 import re
 import statistics
 import sys
@@ -18,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze import gpx_stats, ACTIVITIES_FILE, GPX_DIR  # noqa: E402
+from analyze import gpx_stats, load, GPX_DIR  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
@@ -46,18 +45,16 @@ def pace(sec_per_km):
 
 
 def load_runs():
-    raw = json.loads(ACTIVITIES_FILE.read_text())
+    fetched_at, acts, _ = load()  # duplicate phone + watch uploads already merged
     runs = []
-    for a in raw["models"]:
-        if a["sport_type"] != "Run" or a["distance_raw"] < 1000 or a["trainer"]:
+    for a in acts:
+        if a["type"] != "Run" or a["km"] < 1 or a["trainer"]:
             continue
-        start = datetime.fromtimestamp(a["start_date_local_raw"])
-        if start < SINCE:
+        if a["start"] < SINCE:
             continue
-        km = a["distance_raw"] / 1000
-        p = a["moving_time_raw"] / a["distance_raw"] * 1000  # s per km
-        run = {"date": start, "km": km, "pace": p, "moving_s": a["moving_time_raw"]}
-        g = GPX_DIR / f"{a['id_str']}.gpx"
+        p = a["moving_s"] / a["km"]  # s per km
+        run = {"date": a["start"], "km": a["km"], "pace": p, "moving_s": a["moving_s"]}
+        g = GPX_DIR / f"{a['id']}.gpx"
         if g.exists():
             try:
                 st = gpx_stats(g)
@@ -66,7 +63,7 @@ def load_runs():
                 pass
         runs.append(run)
     runs.sort(key=lambda r: r["date"])
-    return runs, raw.get("fetched_at", "?")
+    return runs, fetched_at
 
 
 def svg(w, h, body):
@@ -278,9 +275,12 @@ def insights(runs):
                     best = (gap, a, b)
     if best:
         _, a, b = best
+        drop = a["hr"] - b["hr"]
+        change = (f"turun <b>{drop:.0f} bpm</b>" if drop > 0 else
+                  f"naik <b>{-drop:.0f} bpm</b>" if drop < 0 else "<b>tidak berubah</b>")
         out.append(f"Detak jantung pada lari 5 km dengan pace nyaris sama "
-                   f"({pace(a['pace'])} vs {pace(b['pace'])} /km) turun "
-                   f"<b>{a['hr'] - b['hr']:.0f} bpm</b> ({a['hr']} &rarr; {b['hr']}) dalam "
+                   f"({pace(a['pace'])} vs {pace(b['pace'])} /km) {change} "
+                   f"({a['hr']} &rarr; {b['hr']}) dalam "
                    f"{(b['date'] - a['date']).days} hari - indikator kebugaran aerobik paling jujur.")
     elif len(steady) >= 4:
         e3 = statistics.mean(r["hr"] for r in steady[:3])

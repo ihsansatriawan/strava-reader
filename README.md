@@ -10,10 +10,27 @@ authenticated with your own session. No API keys, no OAuth apps, no subscription
 
 | Artifact | What it is |
 |---|---|
-| `data/` | Full archive: JSON summaries of every activity, the raw `.fit` your watch uploaded, and GPX exports (GPS + elevation + heart rate) |
-| `reports/latest.md` | Training report: totals by sport, weekly trend, pace trend, HR table, records |
-| `reports/progress.html` | Visual dashboard: volume bars, pace trend, HR-efficiency scatter, long-run growth, consistency calendar, computed insights |
+| `data/` | Archive of every activity **since 2026-01-01**: JSON summaries, the raw `.fit` your device uploaded, and GPX exports (GPS + elevation + heart rate) |
+| `reports/latest.md` | Training report since 2026-01-01: totals by sport, this week vs 4-week average, last 12 weeks, monthly run pace, HR table, records |
+| `reports/report-<date>-<N>mo.md` | The same report for the last N months (`--months N`) |
+| `reports/progress.html` | Rolling dashboard of runs since June 2026: volume bars, pace trend, HR-efficiency scatter, distance per run, consistency calendar, computed insights |
+| `reports/story.html` | The story of every run since July 2026, read point by point from GPX (see below) |
 | `diagrams/` | Three diagrams explaining exactly how the whole mechanism works |
+
+## Data scope: 2026 only
+
+`scripts/config.py` holds one constant, `DATA_SINCE = datetime(2026, 1, 1)`,
+used by every script:
+
+- `fetch.py` still pages through all summaries (it is cheap), but stores only
+  activities starting on or after `DATA_SINCE` in `data/activities.json` and
+  downloads FIT/GPX only for those.
+- `analyze.py`, `progress.py` and `story.py` read only activities from
+  `DATA_SINCE` onward, so older files already in `data/` are ignored without a
+  re-sync. They are not deleted.
+
+Change the year in that one place to widen or narrow the scope. Start dates
+are compared in the activity's local wall-clock time.
 
 ## How it works
 
@@ -23,7 +40,7 @@ For a logged-in free account these endpoints are all accessible:
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `GET /athlete/training_activities?page=N` (with `X-Requested-With: XMLHttpRequest` header) | free | JSON summaries of ALL your activities (distance, time, elevation, ...) |
-| `GET /activities/{id}/export_original` | free | the raw file your watch uploaded (FIT) |
+| `GET /activities/{id}/export_original` | free | the raw file your device uploaded (FIT) |
 | `GET /activities/{id}/export_gpx` | free | GPX with GPS + elevation + heart rate |
 | `GET /activities/{id}/streams` | **paywalled (403)** | website analysis streams — not needed, the exports contain the same raw data |
 
@@ -35,7 +52,32 @@ dedicated Chrome profile (`chrome-data/`). `scripts/fetch.py`:
 3. Syncs the current `_strava4_session` cookie via the `agent-browser` CLI.
 4. Fetches everything over plain HTTP with that cookie (fast), with an
    in-browser fallback if Cloudflare interferes.
-5. Downloads only what's new (`data/downloads.json` tracks state).
+5. Keeps only activities since `DATA_SINCE` and downloads only what's new
+   (`data/downloads.json` tracks state).
+
+### How the data is cleaned
+
+- **Distance and moving time come from the watch, not Strava's recount.**
+  Strava recomputes a watch upload's distance from its GPS points; when the
+  watch GPS stalls, that recount runs short (up to ~28% on some Huawei runs)
+  and the stalled stretch counts as "stopped". So for every activity whose FIT
+  file was written by a device (anything but Strava's own phone recorder),
+  `scripts/fit.py` reads the device's own session distance, and moving time is
+  rebuilt from its speed series (≥ 1 m/s for runs, ≥ 0.5 m/s otherwise).
+  Strava's number is kept as `strava_km`. `story.html` also re-times its
+  per-point analysis on the watch's speed series when the GPS track misses the
+  watch total by > 3% — totals are right then, but single km are estimates,
+  so per-km bests are left out for those runs.
+- **Duplicate uploads are merged.** If both a phone app and a watch upload the
+  same run, Strava keeps both. Every report collapses activities of the same
+  sport that start within 3 minutes into one, keeping the copy with heart rate
+  (the watch), then the earlier upload. Without this, totals double-count. Once
+  you record with the watch only, there is nothing to merge.
+- **Local time is kept as local time.** Strava's `start_date_local_raw` is the
+  wall-clock time encoded as a UTC epoch; it is decoded as UTC so the machine's
+  timezone can't shift an evening run into the next day (and the next week).
+- **GPX is parsed with regex on purpose** — Homebrew Python's `pyexpat` can be
+  broken against the system libexpat, and Strava GPX is machine-generated.
 
 ## Requirements
 
@@ -95,20 +137,21 @@ the cloned profile logs in automatically on the same machine.
 python3 scripts/fetch.py
 ```
 
-Watch it paginate through `/athlete/training_activities` and download every
-`.fit` + `.gpx`. Your data now lives in `data/` (~40 MB for a few years of
-activities).
+Watch it paginate through `/athlete/training_activities` and download the
+`.fit` + `.gpx` of every activity since `DATA_SINCE`. Your data now lives in
+`data/`.
 
 ### 4. Read your data
 
 ```bash
-python3 scripts/analyze.py               # -> reports/latest.md (all-time)
+python3 scripts/analyze.py               # -> reports/latest.md (since DATA_SINCE)
 python3 scripts/analyze.py --months 4    # -> reports/report-<date>-4mo.md (recent window)
 python3 scripts/progress.py              # -> reports/progress.html (dashboard)
-open reports/progress.html
+python3 scripts/story.py                 # -> reports/story.html (story since July)
+open reports/story.html
 ```
 
-How to read the dashboard:
+How to read the dashboard (`progress.html`):
 
 - **Volume mingguan** — bars are km/week; the line is the 4-week rolling
   average. Ramp rate is your injury-risk dial.
@@ -120,9 +163,37 @@ How to read the dashboard:
 - The **insights list** at the top is computed from your data (pace delta,
   HR at matched pace, ramp rate, consistency %) — not hand-written.
 
-### 5. Schedule it
+What the story page (`story.html`) shows. Every headline and sentence on it is
+computed from the data, so it rewrites itself on each sync:
 
-A macOS LaunchAgent runs the full pipeline **weekly, Sunday 22:00**:
+| Section | What it answers |
+|---|---|
+| Angka yang jujur | Totals after merging duplicates, and how far the phone and watch copies of the same run disagree |
+| Lari vs jalan | Each run as a timeline of running vs walking/stopped (10-second slices slower than 12:00/km) |
+| Jantung yang sama | Pace while HR is 135–145 bpm, above weekly volume. Skips the first 5 minutes (HR lags pace) and needs ≥ 5 minutes in the band |
+| Intensitas | Share of time per HR band, per run |
+| Di mana | Tracks and start places, month by month (places matched within 1.5 km of a run's first GPS point) |
+| Kapan | Weekday × week calendar and start-hour histogram |
+| Lari terjauh | km splits, HR and elevation on one distance axis, with a hover crosshair |
+| Beban latihan | This week vs the 4 weeks before (acute:chronic ratio), with the km that brings next week back to ≤ 1.3× |
+
+The page works in light and dark mode and at phone width; every chart has a
+hover tooltip and a "Lihat tabel" table view.
+
+### 5. Run the tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+They cover the data scope, local-time decoding, duplicate merging, the FIT
+reader (on a synthetic Huawei-style file) and the watch-over-Strava distance
+rule.
+
+### 6. Schedule it
+
+A macOS LaunchAgent runs the full pipeline (fetch → analyze → progress →
+story) **weekly, Sunday 22:00**:
 
 ```bash
 cat > ~/Library/LaunchAgents/com.ihsan.strava-sync.plist <<'PLIST'
@@ -154,14 +225,34 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ihsan.strava-sync.pl
   then `launchctl bootout` + `bootstrap` again.
 - Remove: `launchctl bootout gui/$(id -u)/com.ihsan.strava-sync && rm ~/Library/LaunchAgents/com.ihsan.strava-sync.plist`
 
+## Known limitations
+
+- **Totals won't match the Strava app exactly.** The reports use the watch's
+  own distance (see "How the data is cleaned"), which for runs where the watch
+  GPS stalled is longer than what Strava shows.
+- **The FIT reader is minimal.** It reads only what the reports need (file id,
+  session totals, speed records), and knows that Huawei writes its whole 5 s
+  speed series up front under a few timestamps. Another device's quirks may
+  need a look at `scripts/fit.py`.
+- **HR bands are rough.** They are anchored to the highest HR ever recorded,
+  not a measured max HR.
+- **Places are yours to name.** `story.py` matches each run's first GPS point
+  to `data/places.json` (`[["Name", lat, lon], ...]`, within 1.5 km). The file
+  lives in the ignored `data/` because it maps your routine; without it every
+  run is "lainnya".
+
 ## Layout
 
 ```
-scripts/fetch.py      # sync: session + summaries + FIT/GPX downloads
-scripts/analyze.py    # markdown report (all-time or --months N)
-scripts/progress.py   # progress.html dashboard
+scripts/config.py     # DATA_SINCE (2026-01-01) + local-time decoding, shared by all scripts
+scripts/fetch.py      # sync: session + summaries + FIT/GPX downloads (since DATA_SINCE)
+scripts/fit.py        # minimal FIT reader: device, session totals, speed series
+scripts/analyze.py    # markdown report (since DATA_SINCE or --months N), watch distance, duplicate merging
+scripts/progress.py   # progress.html dashboard (runs since June 2026)
+scripts/story.py      # story.html, GPX point-by-point story (runs since July 2026)
 scripts/sync.sh       # pipeline wrapper for the scheduler
 scripts/relogin.sh    # visible Chrome for the one manual login
+tests/                # python3 -m unittest discover -s tests
 chrome-data/          # automation Chrome profile (your Strava session)  [ignored]
 data/                 # your data                                          [ignored]
 reports/              # generated reports                                  [ignored]
@@ -178,12 +269,15 @@ diagrams/             # mechanism diagrams (public-safe)
 - **`crontab -` hangs**: on some macOS setups writing crontabs stalls; that's
   why this repo uses launchd.
 - **Homebrew Python `pyexpat` broken** (`ImportError: No module named expat`):
-  the analyzer parses GPX with regex on purpose; you shouldn't hit this.
+  the scripts parse GPX with regex on purpose; you shouldn't hit this.
 
 ## Safety & privacy
 
 - `chrome-data/` holds a live Strava session — **treat it like a password**.
-- `data/` is your full location history. `reports/` is your training log.
+  So does `data/session.json` (the synced cookie).
+- `data/` is your location history. `reports/` is your training log, and
+  `story.html` draws your routes and start points, which can reveal where you
+  live — don't share it without cropping the start and end of each route.
 - These directories, plus `.env`, `logs/`, and `.claude/`, are all in
   `.gitignore` and must never be committed or published.
 - This repository itself (scripts, diagrams, docs) contains no personal data.
